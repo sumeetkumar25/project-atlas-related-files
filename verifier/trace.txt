@@ -1,0 +1,63 @@
+# atlas/verifier/trace.py
+"""
+Pipeline Trace Integration
+
+Decorators and utilities for integrating the EventVerifier
+into existing research modules without modifying their core logic.
+"""
+
+from typing import Optional, Callable
+import functools
+
+from .event_verifier import EventVerifier
+
+
+# Global verifier instance (singleton pattern)
+_global_verifier: Optional[EventVerifier] = None
+
+
+def get_verifier() -> EventVerifier:
+    """
+    Get the global EventVerifier instance.
+    
+    Creates one if it doesn't exist.
+    """
+    global _global_verifier
+    if _global_verifier is None:
+        _global_verifier = EventVerifier()
+    return _global_verifier
+
+
+def reset_verifier() -> None:
+    """Reset the global verifier for a fresh run"""
+    global _global_verifier
+    if _global_verifier is not None:
+        _global_verifier.clear()
+
+
+def trace_module005(trend_id, direction, start_idx, end_idx, trend_length=None):
+    """Record Module 005 output in the global verifier"""
+    v = get_verifier()
+    v.record_module005(trend_id, direction, start_idx, end_idx, trend_length)
+
+
+def trace_module007(trend_id, direction, pullback_end_idx, 
+                    pullback_depth_pct, pullback_duration, recovered=None):
+    """Record Module 007 output in the global verifier"""
+    v = get_verifier()
+    v.record_module007(trend_id, direction, pullback_end_idx,
+                       pullback_depth_pct, pullback_duration, recovered)
+
+
+def trace_module008(trend_id, direction, entry_idx, entry_price, 
+                    continuation, threshold_pct=None):
+    """Record Module 008 output in the global verifier"""
+    v = get_verifier()
+    v.record_module008(trend_id, direction, entry_idx, entry_price,
+                       continuation, threshold_pct)
+
+
+def trace_module009(trend_id, direction, mfe_pct, mae_pct, rr_ratio=None):
+    """Record Module 009 output in the global verifier"""
+    v = get_verifier()
+    v.record_module009(trend_id, direction, mfe_pct, mae_pct, rr_ratio)

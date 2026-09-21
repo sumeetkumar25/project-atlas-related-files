@@ -1,0 +1,456 @@
+# atlas/verifier/event_verifier.py
+"""
+Atlas Pipeline Event Verifier
+
+Tracks every event through the module chain and verifies
+that properties remain consistent from module to module.
+
+FIXED: Uses exact future window indices from Module 009.
+No arbitrary lookahead reconstruction. Deterministic verification.
+"""
+
+import math
+from dataclasses import dataclass, field, asdict
+from typing import List, Dict, Optional, Any
+import pandas as pd
+import numpy as np
+
+
+@dataclass
+class TraceRecord:
+    """
+    A single event traced through all pipeline modules.
+    
+    Stores exact window indices so the verifier reproduces
+    the same analysis window that each module used.
+    """
+    
+    trend_id: Any = None
+    
+    # Module 005: Trend Segmentation
+    module005_direction: Optional[str] = None
+    module005_start_idx: Optional[int] = None
+    module005_end_idx: Optional[int] = None
+    module005_trend_length: Optional[int] = None
+    
+    # Module 007: Pullback Statistics
+    module007_direction: Optional[str] = None
+    module007_pullback_end_idx: Optional[int] = None
+    module007_pullback_depth_pct: Optional[float] = None
+    module007_pullback_duration: Optional[int] = None
+    module007_recovered: Optional[bool] = None
+    
+    # Module 008: Continuation Probability
+    module008_direction: Optional[str] = None
+    module008_entry_idx: Optional[int] = None
+    module008_entry_price: Optional[float] = None
+    module008_continuation: Optional[str] = None
+    module008_threshold_pct: Optional[float] = None
+    
+    # Module 009: MFE/MAE (with exact window indices)
+    module009_direction: Optional[str] = None
+    module009_entry_idx: Optional[int] = None       # Same as 008 entry_idx
+    module009_window_end_idx: Optional[int] = None  # Last index of future window
+    module009_mfe_pct: Optional[float] = None
+    module009_mae_pct: Optional[float] = None
+    module009_rr_ratio: Optional[float] = None
+    
+    # Verification data (computed from prices using exact window)
+    close_at_entry: Optional[float] = None
+    window_start_idx: Optional[int] = None
+    window_end_idx: Optional[int] = None
+    future_prices: Optional[List[float]] = None
+    future_max: Optional[float] = None
+    future_min: Optional[float] = None
+    
+    # Status
+    status: str = "pending"
+    issues: List[str] = field(default_factory=list)
+    
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        # Convert future_prices list to string for CSV export
+        if d.get('future_prices'):
+            d['future_prices'] = str(d['future_prices'])
+        return d
+
+
+class EventVerifier:
+    """
+    Atlas pipeline verification utility.
+    
+    Uses EXACT window indices from Module 009 to reproduce
+    the same analysis window. No arbitrary lookahead.
+    
+    Deterministic: given the same prices and indices,
+    always produces the same verification result.
+    """
+    
+    def __init__(self):
+        self.records: Dict[Any, TraceRecord] = {}
+        self._close_prices: Optional[pd.Series] = None
+    
+    # ============================================================
+    # Record Methods
+    # ============================================================
+    
+    def record_module005(self, trend_id: Any, direction: str,
+                         start_idx: int, end_idx: int,
+                         trend_length: Optional[int] = None) -> None:
+        """Record trend segmentation from Module 005."""
+        if trend_id not in self.records:
+            self.records[trend_id] = TraceRecord(trend_id=trend_id)
+        
+        r = self.records[trend_id]
+        r.module005_direction = self._normalize_direction(direction)
+        r.module005_start_idx = start_idx
+        r.module005_end_idx = end_idx
+        r.module005_trend_length = trend_length or (end_idx - start_idx + 1)
+    
+    def record_module007(self, trend_id: Any, direction: str,
+                         pullback_end_idx: int,
+                         pullback_depth_pct: float,
+                         pullback_duration: int,
+                         recovered: Optional[bool] = None) -> None:
+        """Record pullback statistics from Module 007."""
+        if trend_id not in self.records:
+            self.records[trend_id] = TraceRecord(trend_id=trend_id)
+        
+        r = self.records[trend_id]
+        r.module007_direction = self._normalize_direction(direction)
+        r.module007_pullback_end_idx = pullback_end_idx
+        r.module007_pullback_depth_pct = pullback_depth_pct
+        r.module007_pullback_duration = pullback_duration
+        r.module007_recovered = recovered
+    
+    def record_module008(self, trend_id: Any, direction: str,
+                         entry_idx: int, entry_price: float,
+                         continuation: str,
+                         threshold_pct: Optional[float] = None) -> None:
+        """Record continuation event from Module 008."""
+        if trend_id not in self.records:
+            self.records[trend_id] = TraceRecord(trend_id=trend_id)
+        
+        r = self.records[trend_id]
+        r.module008_direction = self._normalize_direction(direction)
+        r.module008_entry_idx = entry_idx
+        r.module008_entry_price = entry_price
+        r.module008_continuation = continuation
+        r.module008_threshold_pct = threshold_pct
+    
+    def record_module009(self, trend_id: Any, direction: str,
+                         entry_idx: int,
+                         window_end_idx: int,
+                         mfe_pct: float, mae_pct: float,
+                         rr_ratio: Optional[float] = None) -> None:
+        """
+        Record MFE/MAE from Module 009 with exact window indices.
+        
+        Args:
+            trend_id: Trend identifier
+            direction: "Up" or "Down"
+            entry_idx: Entry bar index (same as Module 008)
+            window_end_idx: Last bar index of the future window (exclusive)
+            mfe_pct: Maximum favorable excursion (%)
+            mae_pct: Maximum adverse excursion (%)
+            rr_ratio: Reward/risk ratio
+        """
+        if trend_id not in self.records:
+            self.records[trend_id] = TraceRecord(trend_id=trend_id)
+        
+        r = self.records[trend_id]
+        r.module009_direction = self._normalize_direction(direction)
+        r.module009_entry_idx = entry_idx
+        r.module009_window_end_idx = window_end_idx
+        r.module009_mfe_pct = mfe_pct
+        r.module009_mae_pct = mae_pct
+        r.module009_rr_ratio = rr_ratio or (mfe_pct / mae_pct if mae_pct > 0 else float('inf'))
+    
+    # ============================================================
+    # Helpers
+    # ============================================================
+    
+    @staticmethod
+    def _normalize_direction(direction: Any) -> str:
+        """Normalize direction to standard "Up" or "Down"."""
+        if direction is None:
+            return "Unknown"
+        if isinstance(direction, (int, float, np.integer, np.floating)):
+            return "Up" if float(direction) > 0 else "Down"
+        
+        d = str(direction).strip().upper()
+        
+        up_variants = {"UP", "UPTREND", "BULL", "LONG", "1", "+1", "BUY"}
+        down_variants = {"DOWN", "DOWNTREND", "BEAR", "SHORT", "-1", "SELL"}
+        
+        if d in up_variants:
+            return "Up"
+        if d in down_variants:
+            return "Down"
+        if "UP" in d or "BULL" in d or "LONG" in d:
+            return "Up"
+        if "DOWN" in d or "BEAR" in d or "SHORT" in d:
+            return "Down"
+        
+        return "Unknown"
+    
+    def set_price_data(self, close_prices: pd.Series) -> None:
+        """Set the actual close price data for verification."""
+        self._close_prices = close_prices
+    
+    # ============================================================
+    # Validation
+    # ============================================================
+    
+    def validate(self, close_prices: Optional[pd.Series] = None) -> List[Dict[str, Any]]:
+        """
+        Validate all recorded events using exact window indices.
+        
+        Uses Module 009's entry_idx and window_end_idx to reproduce
+        the exact same future window that Module 009 analyzed.
+        
+        No arbitrary lookahead. Fully deterministic.
+        """
+        if close_prices is not None:
+            self.set_price_data(close_prices)
+        
+        prices = self._close_prices
+        issues = []
+        
+        for trend_id, r in self.records.items():
+            r.issues = []
+            r.status = "valid"
+            
+            # --------------------------------------------------
+            # Check 1: Direction consistency
+            # --------------------------------------------------
+            directions = [
+                r.module005_direction,
+                r.module007_direction,
+                r.module008_direction,
+                r.module009_direction
+            ]
+            present = [d for d in directions if d is not None and d != "Unknown"]
+            
+            if len(present) >= 2 and len(set(present)) > 1:
+                issue = f"Direction mismatch across modules: {present}"
+                r.issues.append(issue)
+                r.status = "direction_mismatch"
+                issues.append({
+                    "trend_id": trend_id,
+                    "issue": issue,
+                    "severity": "error",
+                    "directions": present
+                })
+            
+            # --------------------------------------------------
+            # Check 2: Entry price vs actual close
+            # --------------------------------------------------
+            entry_idx = r.module009_entry_idx or r.module008_entry_idx
+            
+            if entry_idx is not None and prices is not None:
+                if 0 <= entry_idx < len(prices):
+                    actual_price = float(prices.iloc[entry_idx])
+                    r.close_at_entry = actual_price
+                    
+                    csv_price = r.module008_entry_price
+                    if csv_price is not None and abs(csv_price - actual_price) > 1e-8:
+                        issue = (f"Entry price mismatch: "
+                                f"CSV={csv_price:.2f}, actual close[{entry_idx}]={actual_price:.2f}")
+                        r.issues.append(issue)
+                        r.status = "price_mismatch"
+                        issues.append({
+                            "trend_id": trend_id,
+                            "issue": issue,
+                            "severity": "error",
+                            "csv_price": csv_price,
+                            "actual_price": actual_price,
+                            "entry_idx": entry_idx
+                        })
+                else:
+                    issue = f"Invalid entry index: {entry_idx} (data has {len(prices)} bars)"
+                    r.issues.append(issue)
+                    r.status = "invalid_index"
+                    issues.append({
+                        "trend_id": trend_id,
+                        "issue": issue,
+                        "severity": "error"
+                    })
+            
+            # --------------------------------------------------
+            # Check 3: MFE/MAE using EXACT window from Module 009
+            # --------------------------------------------------
+            window_end = r.module009_window_end_idx
+            
+            if (entry_idx is not None and window_end is not None and 
+                prices is not None and r.module009_mfe_pct is not None):
+                
+                if 0 <= entry_idx < window_end <= len(prices):
+                    # Use EXACT window that Module 009 used
+                    future = prices.iloc[entry_idx + 1:window_end].dropna().values
+                    
+                    if len(future) > 0:
+                        r.window_start_idx = entry_idx + 1
+                        r.window_end_idx = window_end
+                        r.future_prices = [float(x) for x in future]
+                        r.future_max = float(future.max())
+                        r.future_min = float(future.min())
+                        
+                        actual_price = r.close_at_entry or r.module008_entry_price or float(prices.iloc[entry_idx])
+                        direction = r.module009_direction or r.module008_direction or "Up"
+                        
+                        # Compute expected values from exact same window
+                        if direction == "Up":
+                            expected_mfe = (r.future_max - actual_price) / actual_price * 100
+                            expected_mae = (actual_price - r.future_min) / actual_price * 100
+                        else:
+                            expected_mfe = (actual_price - r.future_min) / actual_price * 100
+                            expected_mae = (r.future_max - actual_price) / actual_price * 100
+                        
+                        expected_mfe = max(0.0, expected_mfe)
+                        expected_mae = max(0.0, expected_mae)
+                        
+                        # Verify MFE
+                        if not math.isclose(r.module009_mfe_pct, expected_mfe, 
+                                           rel_tol=1e-4, abs_tol=0.05):
+                            diff = abs(r.module009_mfe_pct - expected_mfe)
+                            issue = (f"MFE mismatch: reported={r.module009_mfe_pct:.4f}%, "
+                                    f"expected={expected_mfe:.4f}% (diff={diff:.4f}%)")
+                            r.issues.append(issue)
+                            if r.status == "valid":
+                                r.status = "mfe_mismatch"
+                            issues.append({
+                                "trend_id": trend_id,
+                                "issue": issue,
+                                "severity": "warning",
+                                "reported_mfe": r.module009_mfe_pct,
+                                "expected_mfe": round(expected_mfe, 4)
+                            })
+                        
+                        # Verify MAE
+                        if not math.isclose(r.module009_mae_pct, expected_mae,
+                                           rel_tol=1e-4, abs_tol=0.05):
+                            diff = abs(r.module009_mae_pct - expected_mae)
+                            issue = (f"MAE mismatch: reported={r.module009_mae_pct:.4f}%, "
+                                    f"expected={expected_mae:.4f}% (diff={diff:.4f}%)")
+                            r.issues.append(issue)
+                            if r.status == "valid":
+                                r.status = "mae_mismatch"
+                            issues.append({
+                                "trend_id": trend_id,
+                                "issue": issue,
+                                "severity": "warning",
+                                "reported_mae": r.module009_mae_pct,
+                                "expected_mae": round(expected_mae, 4)
+                            })
+                else:
+                    issue = (f"Invalid window: entry={entry_idx}, "
+                            f"window_end={window_end}, data_len={len(prices)}")
+                    r.issues.append(issue)
+                    r.status = "invalid_window"
+                    issues.append({
+                        "trend_id": trend_id,
+                        "issue": issue,
+                        "severity": "error"
+                    })
+        
+        return issues
+    
+    # ============================================================
+    # Report
+    # ============================================================
+    
+    def generate_report(self) -> pd.DataFrame:
+        """Generate pipeline trace report."""
+        rows = []
+        
+        for trend_id, r in sorted(self.records.items(), 
+                                   key=lambda x: x[0] if x[0] is not None else 0):
+            rows.append({
+                "trend_id": trend_id,
+                "005_direction": r.module005_direction,
+                "005_start_idx": r.module005_start_idx,
+                "005_end_idx": r.module005_end_idx,
+                "005_length": r.module005_trend_length,
+                "007_direction": r.module007_direction,
+                "007_pb_end_idx": r.module007_pullback_end_idx,
+                "007_pb_depth_pct": r.module007_pullback_depth_pct,
+                "007_pb_duration": r.module007_pullback_duration,
+                "007_recovered": r.module007_recovered,
+                "008_direction": r.module008_direction,
+                "008_entry_idx": r.module008_entry_idx,
+                "008_entry_price": r.module008_entry_price,
+                "008_continuation": r.module008_continuation,
+                "008_threshold_pct": r.module008_threshold_pct,
+                "009_direction": r.module009_direction,
+                "009_entry_idx": r.module009_entry_idx,
+                "009_window_end_idx": r.module009_window_end_idx,
+                "009_mfe_pct": r.module009_mfe_pct,
+                "009_mae_pct": r.module009_mae_pct,
+                "009_rr_ratio": r.module009_rr_ratio,
+                "window_start": r.window_start_idx,
+                "window_end": r.window_end_idx,
+                "close_at_entry": r.close_at_entry,
+                "future_max": r.future_max,
+                "future_min": r.future_min,
+                "future_len": len(r.future_prices) if r.future_prices else 0,
+                "status": r.status,
+                "issues": "; ".join(r.issues) if r.issues else "none"
+            })
+        
+        return pd.DataFrame(rows)
+    
+    def summary(self) -> str:
+        """Generate human-readable verification summary."""
+        lines = []
+        lines.append("=" * 70)
+        lines.append("ATLAS PIPELINE EVENT VERIFIER - SUMMARY")
+        lines.append("=" * 70)
+        
+        total = len(self.records)
+        
+        if total == 0:
+            lines.append("\n  No events recorded.")
+            lines.append("\n" + "=" * 70)
+            return "\n".join(lines)
+        
+        status_counts: Dict[str, int] = {}
+        for r in self.records.values():
+            status_counts[r.status] = status_counts.get(r.status, 0) + 1
+        
+        lines.append(f"\nTotal events tracked: {total}")
+        lines.append(f"\nStatus distribution:")
+        
+        for status, count in sorted(status_counts.items()):
+            icon = "✓" if status == "valid" else "✗" if "error" in status or "mismatch" in status else "⚠"
+            lines.append(f"  {icon} {status}: {count}")
+        
+        dirs = set()
+        for r in self.records.values():
+            for d in [r.module005_direction, r.module008_direction, r.module009_direction]:
+                if d and d != "Unknown":
+                    dirs.add(d)
+        if dirs:
+            lines.append(f"\n✓ Directions present: {dirs}")
+        
+        total_issues = sum(len(r.issues) for r in self.records.values())
+        
+        if total_issues > 0:
+            lines.append(f"\n⚠ Total issues: {total_issues}")
+            issue_types: Dict[str, int] = {}
+            for r in self.records.values():
+                for issue in r.issues:
+                    itype = issue.split(":")[0] if ":" in issue else issue
+                    issue_types[itype] = issue_types.get(itype, 0) + 1
+            for itype, count in sorted(issue_types.items(), key=lambda x: x[1], reverse=True):
+                lines.append(f"    - {itype}: {count}")
+        else:
+            lines.append(f"\n✓ No issues found - pipeline is consistent")
+        
+        lines.append("\n" + "=" * 70)
+        return "\n".join(lines)
+    
+    def clear(self) -> None:
+        """Clear all records."""
+        self.records.clear()
+        self._close_prices = None

@@ -1,0 +1,57 @@
+"""
+Validation Context - Container for validation module inputs.
+"""
+
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any
+import pandas as pd
+
+
+@dataclass
+class ValidationContext:
+    """
+    Context container for validation modules.
+    
+    All validation modules receive this context instead of loading files directly.
+    The ValidationRunner loads all required data and passes it via this context.
+    """
+    
+    # Core validation data
+    trade_log: Optional[pd.DataFrame] = None
+    equity_curve: Optional[pd.DataFrame] = None
+    positions: Optional[pd.DataFrame] = None
+    fills: Optional[pd.DataFrame] = None
+    
+    # Module outputs
+    reports: Dict[str, Any] = field(default_factory=dict)
+    artifacts: Dict[str, Any] = field(default_factory=dict)
+    
+    # Metadata
+    dataset: str = ""
+    timeframe: str = ""
+    execution_timestamp: str = ""
+    
+    # Additional context
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    
+    def has_trade_log(self) -> bool:
+        """Check if trade log is available."""
+        return self.trade_log is not None and not self.trade_log.empty
+    
+    def has_equity_curve(self) -> bool:
+        """Check if equity curve is available."""
+        return self.equity_curve is not None and not self.equity_curve.empty
+    
+    def get_trade_count(self) -> int:
+        """Get number of trades in trade log."""
+        if self.trade_log is None:
+            return 0
+        return len(self.trade_log)
+    
+    def get_artifact(self, key: str) -> Any:
+        """Get an artifact by key."""
+        return self.artifacts.get(key)
+    
+    def set_artifact(self, key: str, value: Any) -> None:
+        """Set an artifact."""
+        self.artifacts[key] = value

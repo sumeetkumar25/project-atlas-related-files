@@ -1,0 +1,459 @@
+"""
+Validation Runner - Executes validation modules on research outputs.
+"""
+
+import sys
+import time
+from pathlib import Path
+from datetime import datetime
+import pandas as pd
+import traceback
+import json
+import re
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from atlas.research.module_loader import ModuleLoader
+from atlas.research.research_logger import ResearchLogger
+from atlas.research.export_manager import ExportManager
+from atlas.framework.artifact_store import ArtifactStore
+from atlas.framework.topological_sort import topological_sort
+from atlas.validation.validation_context import ValidationContext
+
+
+class ValidationRunner:
+    """
+    Runner for validation modules (210-299).
+    
+    Loads research outputs and passes them to validation modules
+    via ValidationContext. No filesystem access in modules.
+    """
+    
+    def __init__(
+        self,
+        research_root: Path = None,
+        output_dir: Path = None,
+        log_dir: Path = None,
+        modules_filter: list = None
+    ):
+        """
+        Initialize the validation runner.
+        
+        Args:
+            research_root: Path to research_results directory
+            output_dir: Path to validation output directory
+            log_dir: Path to log directory
+            modules_filter: List of module IDs to run (None = all)
+        """
+        if research_root is None:
+            research_root = PROJECT_ROOT / "research_results"
+        if output_dir is None:
+            output_dir = PROJECT_ROOT / "validation_results"
+        if log_dir is None:
+            log_dir = output_dir / "logs"
+        
+        self.research_root = Path(research_root)
+        self.output_dir = Path(output_dir)
+        self.log_dir = Path(log_dir)
+        self.modules_filter = modules_filter
+        
+        # Initialize components
+        self.module_loader = ModuleLoader()
+        self.logger = ResearchLogger(self.log_dir)
+        self.export_manager = ExportManager(self.output_dir)
+        self.artifact_store = ArtifactStore()
+        
+        self.results = []
+        self.completed_modules = set()
+        self.start_time = None
+        self.end_time = None
+    
+    def _load_research_outputs(self) -> ValidationContext:
+        """
+        Load all research outputs into a ValidationContext.
+        
+        Returns:
+            ValidationContext: Loaded context with all research data
+        """
+        context = ValidationContext()
+        
+        # Find Module210 output (execution simulation)
+        module210_dir = self.research_root / "raw" / "module210"
+        if module210_dir.exists():
+            # Find trade log
+            for csv_file in module210_dir.glob("*/executed_trade_log.parquet"):
+                try:
+                    trade_log = pd.read_parquet(csv_file)
+                    context.trade_log = trade_log
+                    context.timeframe = csv_file.parent.name
+                    context.metadata['trade_log_source'] = str(csv_file)
+                    self.logger.info(f"Loaded trade log: {len(trade_log)} trades from {context.timeframe}")
+                except Exception as e:
+                    self.logger.warning(f"Could not load trade log: {e}")
+            
+            # Find equity curve
+            for csv_file in module210_dir.glob("*/equity_curves.parquet"):
+                try:
+                    equity_curve = pd.read_parquet(csv_file)
+                    context.equity_curve = equity_curve
+                    context.metadata['equity_curve_source'] = str(csv_file)
+                    self.logger.info(f"Loaded equity curve: {len(equity_curve)} rows")
+                except Exception as e:
+                    self.logger.warning(f"Could not load equity curve: {e}")
+        
+        # Also check for consolidated outputs
+        consolidated_dir = self.research_root / "consolidated"
+        if consolidated_dir.exists():
+            for csv_file in consolidated_dir.glob("*.csv"):
+                try:
+                    df = pd.read_csv(csv_file)
+                    context.artifacts[csv_file.stem] = df
+                except Exception as e:
+                    self.logger.warning(f"Could not load {csv_file.name}: {e}")
+        
+        return context
+    
+    def _discover_validation_modules(self) -> list:
+        """
+        Discover validation modules (210-299).
+        
+        Returns:
+            list: Module metadata dictionaries
+        """
+        all_modules = self.module_loader.discover_modules()
+        
+        # Filter to validation modules (210-299)
+        validation_modules = []
+        for module in all_modules:
+            module_id = int(module['module_id'])
+            if 210 <= module_id <= 299:
+                validation_modules.append(module)
+        
+        # Apply filter if specified
+        if self.modules_filter:
+            validation_modules = [
+                m for m in validation_modules 
+                if m['module_id'] in self.modules_filter
+            ]
+        
+        return validation_modules
+    
+    def run(self) -> bool:
+        """
+        Run all validation modules.
+        
+        Returns:
+            bool: True if successful
+        """
+        self.start_time = time.time()
+        
+        # Load research outputs
+        self.logger.info("Loading research outputs...")
+        context = self._load_research_outputs()
+        
+        if not context.has_trade_log():
+            self.logger.warning("No trade log found in research outputs")
+        
+        # Discover validation modules
+        self.logger.info("Discovering validation modules...")
+        modules = self._discover_validation_modules()
+        
+        self.logger.info(f"Found {len(modules)} validation modules")
+        
+        if not modules:
+            self.logger.warning("No validation modules found!")
+            return True
+        
+        # Build execution order
+        self.logger.info("Building execution order...")
+        try:
+            execution_order = topological_sort(modules)
+            self.logger.info(f"Execution order: {[m['module_id'] for m in execution_order]}")
+        except ValueError as e:
+            self.logger.error(f"Circular dependency detected: {e}")
+            return False
+        
+        # Start campaign
+        self.logger.start_campaign(
+            "Validation Campaign v1",
+            execution_order,
+            [context.timeframe] if context.timeframe else []
+        )
+        
+        # Run each validation module
+        all_stats = []
+        index_data = []
+        
+        for module_info in execution_order:
+            module_id = module_info['module_id']
+            module_name = module_info.get('module_name', module_id)
+            dependencies = module_info.get('metadata', {}).get('depends_on', [])
+            
+            self.logger.start_module(module_id, context.timeframe or "validation")
+            
+            try:
+                start_time = time.time()
+                
+                # Create output directory
+                module_output_dir = (
+                    self.export_manager.raw_dir / 
+                    f"module{module_id}" / 
+                    (context.timeframe or "validation")
+                )
+                module_output_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Instantiate module
+                module = self.module_loader.instantiate_module(module_info)
+                
+                # Set validation context if module supports it
+                if hasattr(module, 'set_validation_context'):
+                    module.set_validation_context(context)
+                elif hasattr(module, 'set_context'):
+                    module.set_context(context)
+                
+                # Run module (using run_dataframe with minimal input)
+                result = self.module_loader.run_module(
+                    module_info,
+                    pd.DataFrame(),  # No raw data needed for validation
+                    dataset_id=f"{module_id}_validation",
+                    output_dir=module_output_dir
+                )
+                
+                duration = time.time() - start_time
+                
+                # Store artifacts
+                if hasattr(result, 'artifacts') and result.artifacts:
+                    self.artifact_store.put(module_id, result.artifacts)
+                    self.logger.info(f"    Stored {len(result.artifacts)} artifacts")
+                
+                # Export outputs
+                self.export_manager.export_module_outputs(
+                    module_id,
+                    context.timeframe or "validation",
+                    result,
+                    module_output_dir
+                )
+                
+                # Extract statistics
+                stats_df = self.export_manager.consolidate_statistics(
+                    module_id,
+                    context.timeframe or "validation",
+                    result
+                )
+                
+                # Add metadata
+                stats_df['timestamp'] = datetime.now().isoformat()
+                stats_df['duration'] = duration
+                stats_df['version'] = module_info.get('module_version', 'unknown')
+                
+                all_stats.append(stats_df)
+                
+                # Build index entry
+                index_data.append({
+                    'module_id': module_id,
+                    'module_name': module_name,
+                    'dataset': context.timeframe or "validation",
+                    'status': 'PASS' if getattr(result, 'status', 'unknown') == 'completed' else 'FAIL',
+                    'csv_path': str(module_output_dir),
+                    'execution_time': duration,
+                    'rows': len(stats_df),
+                    'version': module_info.get('module_version', 'unknown'),
+                    'timestamp': datetime.now().isoformat(),
+                    'dependencies': ','.join(dependencies),
+                    'trade_count': context.get_trade_count()
+                })
+                
+                self.logger.module_result(
+                    module_id,
+                    context.timeframe or "validation",
+                    True,
+                    duration,
+                    len(stats_df)
+                )
+                
+                self.results.append({
+                    'module_id': module_id,
+                    'success': True,
+                    'duration': duration,
+                    'stats_count': len(stats_df)
+                })
+                
+                self.completed_modules.add(module_id)
+                
+            except Exception as e:
+                duration = time.time() - start_time
+                self.logger.error(f"    ✗ FAILED: {str(e)}")
+                self.logger.error(traceback.format_exc())
+                
+                self.results.append({
+                    'module_id': module_id,
+                    'success': False,
+                    'duration': duration,
+                    'error': str(e)
+                })
+                
+                index_data.append({
+                    'module_id': module_id,
+                    'module_name': module_name,
+                    'dataset': context.timeframe or "validation",
+                    'status': 'FAIL',
+                    'csv_path': '',
+                    'execution_time': duration,
+                    'rows': 0,
+                    'version': module_info.get('module_version', 'unknown'),
+                    'timestamp': datetime.now().isoformat(),
+                    'dependencies': ','.join(dependencies),
+                    'error': str(e)
+                })
+        
+        self.end_time = time.time()
+        total_time = self.end_time - self.start_time
+        
+        # Consolidate all statistics
+        if all_stats:
+            master_df = pd.concat(all_stats, ignore_index=True)
+            self.export_manager.save_master_database(master_df)
+            self.logger.info(f"Saved validation master database: {len(master_df)} rows")
+        
+        # Save validation index
+        index_df = pd.DataFrame(index_data)
+        self.export_manager.save_research_index(index_df)
+        self.logger.info(f"Saved validation index: {len(index_df)} entries")
+        
+        # Generate summary
+        summary = self._build_summary(total_time, context)
+        summary_path = self.output_dir / "validation_summary.txt"
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(summary)
+        self.logger.info(f"Saved validation summary: {summary_path}")
+        
+        # Finish campaign
+        total_success = sum(1 for r in self.results if r.get('success', False))
+        self.logger.finish_campaign(len(self.results), total_success, total_time)
+        
+        return total_success == len(self.results)
+    
+    def _build_summary(self, total_time: float, context: ValidationContext) -> str:
+        """
+        Build validation summary report.
+        
+        Args:
+            total_time: Total execution time
+            context: Validation context
+        
+        Returns:
+            str: Summary report
+        """
+        lines = []
+        lines.append("=" * 60)
+        lines.append("VALIDATION SUMMARY")
+        lines.append("=" * 60)
+        lines.append("")
+        lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Timeframe: {context.timeframe or 'N/A'}")
+        lines.append(f"Trades: {context.get_trade_count()}")
+        lines.append("")
+        
+        total_modules = len(self.results)
+        passed = sum(1 for r in self.results if r.get('success', False))
+        failed = total_modules - passed
+        
+        lines.append("## Overview")
+        lines.append(f"Modules Executed: {total_modules}")
+        lines.append(f"Passed: {passed}")
+        lines.append(f"Failed: {failed}")
+        lines.append(f"Success Rate: {(passed/total_modules*100):.1f}%" if total_modules > 0 else "N/A")
+        lines.append(f"Total Time: {total_time:.1f}s ({total_time/60:.1f}m)")
+        lines.append("")
+        
+        # Module breakdown
+        lines.append("## Module Results")
+        lines.append("")
+        lines.append("| Module | Status | Time (s) | Stats |")
+        lines.append("|--------|--------|----------|-------|")
+        
+        for r in self.results:
+            status = "✓ PASS" if r.get('success', False) else "✗ FAIL"
+            module_id = r.get('module_id', '')
+            duration = r.get('duration', 0)
+            stats_count = r.get('stats_count', 0)
+            lines.append(f"| {module_id} | {status} | {duration:.2f} | {stats_count} |")
+        
+        lines.append("")
+        
+        # Failed modules
+        failed_modules = [r for r in self.results if not r.get('success', False)]
+        if failed_modules:
+            lines.append("## Failed Modules")
+            lines.append("")
+            for r in failed_modules:
+                lines.append(f"- {r.get('module_id')}: {r.get('error', 'Unknown error')}")
+            lines.append("")
+        
+        lines.append("=" * 60)
+        
+        return "\n".join(lines)
+    
+    def run_single(self, module_id: str) -> bool:
+        """
+        Run a single validation module.
+        
+        Args:
+            module_id: Module ID (e.g., "212")
+        
+        Returns:
+            bool: True if successful
+        """
+        self.modules_filter = [module_id]
+        return self.run()
+
+
+def main():
+    """Main entry point."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Validation Runner for Project Atlas")
+    parser.add_argument(
+        "--research-root",
+        type=str,
+        default=str(PROJECT_ROOT / "research_results"),
+        help="Path to research_results directory"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=str(PROJECT_ROOT / "validation_results"),
+        help="Output directory for validation results"
+    )
+    parser.add_argument(
+        "--modules",
+        type=str,
+        nargs='+',
+        help="Specific module IDs to run (e.g., 210 211 212 213)"
+    )
+    
+    args = parser.parse_args()
+    
+    print("=" * 60)
+    print("PROJECT ATLAS - VALIDATION RUNNER")
+    print("=" * 60)
+    print(f"\nResearch Root: {args.research_root}")
+    print(f"Output Dir: {args.output_dir}")
+    print(f"Modules: {args.modules if args.modules else 'ALL'}")
+    print("\n" + "-" * 60)
+    
+    runner = ValidationRunner(
+        research_root=Path(args.research_root),
+        output_dir=Path(args.output_dir),
+        modules_filter=args.modules
+    )
+    
+    success = runner.run()
+    
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,62 @@
+# atlas/verifier/report.py
+"""
+Pipeline Verification Report Generator
+
+Exports verification results to CSV and text formats.
+"""
+
+from pathlib import Path
+from typing import Optional
+import pandas as pd
+
+from .event_verifier import EventVerifier
+
+
+def export_verification_csv(verifier: EventVerifier, 
+                            output_path: str = "outputs/pipeline_trace.csv") -> Path:
+    """
+    Export pipeline trace to CSV.
+    
+    Args:
+        verifier: EventVerifier with recorded events
+        output_path: Path for CSV output
+        
+    Returns:
+        Path to exported file
+    """
+    df = verifier.generate_report()
+    
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    df.to_csv(path, index=False)
+    
+    return path
+
+
+def export_verification_report(verifier: EventVerifier,
+                               output_path: str = "outputs/pipeline_verification.txt") -> Path:
+    """
+    Export verification summary to text file.
+    
+    Args:
+        verifier: EventVerifier with recorded events
+        output_path: Path for text output
+        
+    Returns:
+        Path to exported file
+    """
+    summary = verifier.summary()
+    
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write(summary)
+    
+    return path
+
+
+def print_verification_summary(verifier: EventVerifier) -> None:
+    """Print verification summary to console"""
+    print(verifier.summary())

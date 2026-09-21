@@ -1,0 +1,313 @@
+# atlas/verifier/test_verifier.py
+"""
+Test the Event Verifier with synthetic data.
+
+FIXED: Uses exact window indices. Prices only populated where data exists.
+Verifier uses Module 009's window_end_idx, not arbitrary lookahead.
+
+Execute from project root:
+    python -m atlas.verifier.test_verifier
+"""
+
+import sys
+import math
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from atlas.verifier import EventVerifier
+
+
+def compute_expected_mfe_mae(entry_price: float, future_prices: np.ndarray,
+                              direction: str) -> tuple:
+    """Compute expected MFE, MAE, RR from future prices."""
+    if direction == "Up":
+        mfe = (future_prices.max() - entry_price) / entry_price * 100
+        mae = (entry_price - future_prices.min()) / entry_price * 100
+    else:
+        mfe = (entry_price - future_prices.min()) / entry_price * 100
+        mae = (future_prices.max() - entry_price) / entry_price * 100
+    
+    mfe = max(0.0, mfe)
+    mae = max(0.0, mae)
+    rr = mfe / mae if mae > 0 else float('inf')
+    
+    return mfe, mae, rr
+
+
+def test_clean_pipeline():
+    """
+    Test that a consistent pipeline passes validation.
+    
+    Uses exact window indices. Prices only populated where data exists.
+    Verifier uses Module 009's window_end_idx.
+    """
+    print("\n" + "=" * 60)
+    print("TEST 1: Clean Pipeline (Deterministic Windows)")
+    print("=" * 60)
+    
+    verifier = EventVerifier()
+    
+    # ---- Build explicit price series (only populated bars) ----
+    n_bars = 250
+    prices = pd.Series(np.nan, index=range(n_bars), dtype=float)
+    
+    # === Long Trade (trend 1) ===
+    entry_idx_long = 150
+    entry_price_long = 105000.0
+    prices[entry_idx_long] = entry_price_long
+    
+    # Future prices with realistic drawdown
+    future_long = np.array([
+        105500, 106200, 107800, 106500, 105800, 104200, 105000, 106000, 108000
+    ])
+    window_end_long = entry_idx_long + 1 + len(future_long)
+    
+    for i, p in enumerate(future_long):
+        prices[entry_idx_long + 1 + i] = p
+    
+    # === Short Trade (trend 2) ===
+    entry_idx_short = 200
+    entry_price_short = 98000.0
+    prices[entry_idx_short] = entry_price_short
+    
+    future_short = np.array([
+        97500, 96800, 96000, 96500, 97200, 98500, 97800, 97000, 95500
+    ])
+    window_end_short = entry_idx_short + 1 + len(future_short)
+    
+    for i, p in enumerate(future_short):
+        prices[entry_idx_short + 1 + i] = p
+    
+    # ---- Compute expected values ----
+    expected_mfe_long, expected_mae_long, expected_rr_long = compute_expected_mfe_mae(
+        entry_price_long, future_long, "Up"
+    )
+    expected_mfe_short, expected_mae_short, expected_rr_short = compute_expected_mfe_mae(
+        entry_price_short, future_short, "Down"
+    )
+    
+    print(f"\n  Long trade:")
+    print(f"    Entry idx: {entry_idx_long}, price: {entry_price_long}")
+    print(f"    Window: [{entry_idx_long+1}, {window_end_long})")
+    print(f"    Future: {future_long.tolist()}")
+    print(f"    MFE={expected_mfe_long:.4f}%, MAE={expected_mae_long:.4f}%, RR={expected_rr_long:.4f}")
+    
+    print(f"\n  Short trade:")
+    print(f"    Entry idx: {entry_idx_short}, price: {entry_price_short}")
+    print(f"    Window: [{entry_idx_short+1}, {window_end_short})")
+    print(f"    Future: {future_short.tolist()}")
+    print(f"    MFE={expected_mfe_short:.4f}%, MAE={expected_mae_short:.4f}%, RR={expected_rr_short:.4f}")
+    
+    # Verify non-zero drawdowns
+    assert expected_mae_long > 0, "Long should have drawdown"
+    assert expected_mae_short > 0, "Short should have adverse excursion"
+    
+    # ---- Record pipeline with EXACT window indices ----
+    verifier.record_module005(1, "Up", 120, entry_idx_long, entry_idx_long - 120 + 1)
+    verifier.record_module005(2, "Down", 170, entry_idx_short, entry_idx_short - 170 + 1)
+    
+    verifier.record_module007(1, "Up", entry_idx_long, 2.5, 10, True)
+    verifier.record_module007(2, "Down", entry_idx_short, 3.0, 12, False)
+    
+    verifier.record_module008(1, "Up", entry_idx_long, entry_price_long, "continuation", 0.5)
+    verifier.record_module008(2, "Down", entry_idx_short, entry_price_short, "reversal", 0.5)
+    
+    # Module 009: includes exact window_end_idx
+    verifier.record_module009(1, "Up", entry_idx_long, window_end_long,
+                              expected_mfe_long, expected_mae_long, expected_rr_long)
+    verifier.record_module009(2, "Down", entry_idx_short, window_end_short,
+                              expected_mfe_short, expected_mae_short, expected_rr_short)
+    
+    # ---- Validate ----
+    verifier.set_price_data(prices)
+    issues = verifier.validate()
+    
+    if len(issues) == 0:
+        print(f"\n  ✓ No issues found (expected)")
+        print(f"  ✓ Deterministic window verification passed")
+        return True
+    else:
+        print(f"\n  ✗ Unexpected issues: {len(issues)}")
+        for issue in issues:
+            print(f"    - [{issue['severity']}] {issue['issue']}")
+        return False
+
+
+def test_direction_mismatch():
+    """Test that direction mismatches are detected."""
+    print("\n" + "=" * 60)
+    print("TEST 2: Direction Mismatch Detection")
+    print("=" * 60)
+    
+    verifier = EventVerifier()
+    verifier.record_module005(1, "Up", 100, 120, 21)
+    verifier.record_module008(1, "Down", 130, 105000.0, "reversal")
+    
+    issues = verifier.validate()
+    
+    direction_issues = [i for i in issues if "Direction mismatch" in i['issue']]
+    
+    if len(direction_issues) > 0:
+        print(f"  ✓ Direction mismatch detected: {direction_issues[0]['issue']}")
+        return True
+    else:
+        print(f"  ✗ Direction mismatch NOT detected")
+        return False
+
+
+def test_price_mismatch():
+    """Test that entry price mismatches are detected."""
+    print("\n" + "=" * 60)
+    print("TEST 3: Entry Price Mismatch Detection")
+    print("=" * 60)
+    
+    verifier = EventVerifier()
+    verifier.record_module008(1, "Up", 130, 105000.0, "continuation")
+    
+    prices = pd.Series(np.nan, index=range(200), dtype=float)
+    prices[130] = 103000.0  # Different from CSV price
+    
+    issues = verifier.validate(prices)
+    
+    price_issues = [i for i in issues if "price mismatch" in i['issue'].lower()]
+    
+    if len(price_issues) > 0:
+        print(f"  ✓ Price mismatch detected")
+        print(f"    CSV: {price_issues[0].get('csv_price')}, Actual: {price_issues[0].get('actual_price')}")
+        return True
+    else:
+        print(f"  ✗ Price mismatch NOT detected")
+        return False
+
+
+def test_invalid_index():
+    """Test that invalid indices are detected."""
+    print("\n" + "=" * 60)
+    print("TEST 4: Invalid Index Detection")
+    print("=" * 60)
+    
+    verifier = EventVerifier()
+    verifier.record_module008(1, "Up", 999, 105000.0, "continuation")
+    
+    prices = pd.Series(np.nan, index=range(200), dtype=float)
+    
+    issues = verifier.validate(prices)
+    
+    index_issues = [i for i in issues if "Invalid entry index" in i['issue']]
+    
+    if len(index_issues) > 0:
+        print(f"  ✓ Invalid index detected: {index_issues[0]['issue']}")
+        return True
+    else:
+        print(f"  ✗ Invalid index NOT detected")
+        return False
+
+
+def test_report_generation():
+    """Test that reports are generated with window indices."""
+    print("\n" + "=" * 60)
+    print("TEST 5: Report Generation (with Window Indices)")
+    print("=" * 60)
+    
+    verifier = EventVerifier()
+    
+    n_bars = 160
+    prices = pd.Series(np.nan, index=range(n_bars), dtype=float)
+    
+    entry_idx = 130
+    entry_price = 105000.0
+    prices[entry_idx] = entry_price
+    
+    future = np.array([106000, 107500, 104200, 106000, 108000])
+    window_end = entry_idx + 1 + len(future)
+    
+    for i, p in enumerate(future):
+        prices[entry_idx + 1 + i] = p
+    
+    expected_mfe, expected_mae, expected_rr = compute_expected_mfe_mae(
+        entry_price, future, "Up"
+    )
+    
+    verifier.record_module005(1, "Up", 100, entry_idx, 31)
+    verifier.record_module007(1, "Up", entry_idx, 2.5, 10, True)
+    verifier.record_module008(1, "Up", entry_idx, entry_price, "continuation", 0.5)
+    verifier.record_module009(1, "Up", entry_idx, window_end,
+                              expected_mfe, expected_mae, expected_rr)
+    
+    verifier.validate(prices)
+    
+    df = verifier.generate_report()
+    
+    checks_passed = 0
+    
+    if len(df) == 1:
+        print(f"  ✓ Report has 1 row")
+        checks_passed += 1
+    
+    # Check window indices are present
+    if '009_window_end_idx' in df.columns and 'window_end' in df.columns:
+        print(f"  ✓ Window indices present in report")
+        checks_passed += 1
+    
+    summary = verifier.summary()
+    
+    if "No issues" in summary:
+        print(f"  ✓ Clean verification")
+        checks_passed += 1
+    
+    print(f"\n  Report columns: {list(df.columns)}")
+    print(f"\n{summary}")
+    print(f"\n  Test: {checks_passed}/3 passed")
+    return checks_passed >= 2
+
+
+def main():
+    """Test the Event Verifier."""
+    
+    print("\n" + "=" * 70)
+    print("ATLAS EVENT VERIFIER - UNIT TESTS")
+    print("=" * 70)
+    print("\n  Deterministic windows from Module 009")
+    print("  Prices only populated where data exists")
+    print("  NaN-safe future window extraction")
+    
+    tests = [
+        ("Clean Pipeline", test_clean_pipeline),
+        ("Direction Mismatch", test_direction_mismatch),
+        ("Price Mismatch", test_price_mismatch),
+        ("Invalid Index", test_invalid_index),
+        ("Report Generation", test_report_generation),
+    ]
+    
+    results = {}
+    for name, test_func in tests:
+        try:
+            results[name] = test_func()
+        except Exception as e:
+            print(f"\n  ✗ {name} ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            results[name] = False
+    
+    print("\n" + "=" * 70)
+    print("RESULTS")
+    print("=" * 70)
+    
+    passed = sum(results.values())
+    total = len(results)
+    
+    for name, result in results.items():
+        print(f"  {'✓' if result else '✗'} {name}")
+    
+    print(f"\n  {passed}/{total} tests passed")
+    
+    return 0 if passed == total else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

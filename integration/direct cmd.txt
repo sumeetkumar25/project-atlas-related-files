@@ -1,0 +1,17 @@
+# Run all modules with default 300s timeout
+python -m atlas.integration.master_test_runner
+
+# Run all modules with custom timeout (600s)
+python -m atlas.integration.master_test_runner --timeout 600
+
+# Run all modules with custom timeout (5400s)
+python -m atlas.integration.master_test_runner --timeout 5400
+
+# Run a single module for diagnostic purposes
+python -m atlas.integration.master_test_runner --single module111
+
+# Run all modules without asking to re-run failed tests
+python -m atlas.integration.master_test_runner --no-re-run
+
+# Run with all options
+python -m atlas.integration.master_test_runner --timeout 600 --no-re-run

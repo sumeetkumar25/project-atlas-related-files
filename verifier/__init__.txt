@@ -1,0 +1,25 @@
+# atlas/verifier/__init__.py
+"""
+Atlas Pipeline Event Verifier
+
+Permanent framework module for verifying event consistency
+across the module chain: 005 → 007 → 008 → 009.
+
+Never modifies data. Reports only.
+"""
+
+from .event_verifier import EventVerifier, TraceRecord
+
+__all__ = ['EventVerifier', 'TraceRecord']# atlas/verifier/__init__.py
+"""
+Atlas Pipeline Event Verifier
+
+Permanent framework module for verifying event consistency
+across the module chain: 005 → 007 → 008 → 009.
+
+Never modifies data. Reports only.
+"""
+
+from .event_verifier import EventVerifier, TraceRecord
+
+__all__ = ['EventVerifier', 'TraceRecord']
