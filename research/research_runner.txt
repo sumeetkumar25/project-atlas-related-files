@@ -1,0 +1,827 @@
+"""
+Research Runner - Main entry point for research campaigns.
+Dataset-aware execution with dependency injection.
+"""
+
+import sys
+import time
+from pathlib import Path
+from datetime import datetime
+import pandas as pd
+import traceback
+import json
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DATA_PATH = PROJECT_ROOT / "data" / "raw"
+
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from atlas.research.dataset_registry import DatasetRegistry
+from atlas.research.module_loader import ModuleLoader
+from atlas.research.export_manager import ExportManager
+from atlas.research.research_logger import ResearchLogger
+from atlas.research.summary_builder import SummaryBuilder
+from atlas.core.result_utils import result_succeeded
+
+from atlas.framework.artifact_store import ArtifactStore
+from atlas.framework.dependency_injector import DependencyInjector
+
+from atlas.research.target_manager import TargetManager
+
+from atlas.research.topological_sort import (
+    topological_sort,
+    get_execution_order,
+)
+
+
+class ResearchRunner:
+    """Main runner for research campaigns with dataset-aware dependency injection."""
+    
+    def __init__(
+        self,
+        data_path: Path = None,
+        output_dir: Path = None,
+        log_dir: Path = None,
+        modules_filter: list = None
+    ):
+        """
+        Initialize the research runner.
+        
+        Args:
+            data_path: Path to raw data directory
+            output_dir: Path to output directory
+            log_dir: Path to log directory
+            modules_filter: List of module IDs to run (None = all)
+        """
+        if data_path is None:
+            data_path = DEFAULT_DATA_PATH
+        if output_dir is None:
+            output_dir = PROJECT_ROOT / "research_results"
+        if log_dir is None:
+            log_dir = output_dir / "logs"
+        
+        self.data_path = Path(data_path)
+        self.output_dir = Path(output_dir)
+        self.log_dir = Path(log_dir)
+        self.modules_filter = modules_filter
+        
+        # Initialize components
+        self.dataset_registry = DatasetRegistry(self.data_path)
+        self.module_loader = ModuleLoader()
+        self.export_manager = ExportManager(self.output_dir)
+        self.logger = ResearchLogger(self.log_dir)
+        self.summary_builder = SummaryBuilder(self.output_dir)
+        
+        # Artifact store and dependency injector
+        self.artifact_store = ArtifactStore()
+        self.dependency_injector = DependencyInjector(
+            self.artifact_store
+        )
+        
+        # Target generation and validation
+        self.target_manager = TargetManager()
+        
+        self.results = []
+        self.completed_modules = set()  # (dataset, module_id) tuples
+        self.start_time = None
+        self.end_time = None
+    
+    def run(self) -> bool:
+        """
+        Run the full research campaign.
+        
+        Returns:
+            bool: True if successful
+        """
+        self.start_time = time.time()
+        
+        # Load datasets
+        self.logger.info("Loading datasets...")
+        datasets = self.dataset_registry.load_all()
+        
+        if not datasets:
+            self.logger.error("No datasets loaded!")
+            return False
+        
+        self.logger.info(f"Loaded {len(datasets)} datasets: {list(datasets.keys())}")
+        
+        # Discover modules
+        self.logger.info("Discovering modules...")
+        modules = self.module_loader.discover_modules()
+        
+        # Build execution order with proper dependency resolution
+        if self.modules_filter:
+            self.logger.info(f"Filtering to modules: {self.modules_filter}")
+            execution_order = []
+            
+            for module_id in self.modules_filter:
+                module_order = get_execution_order(modules, root_module=module_id)
+                execution_order.extend(module_order)
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            execution_order = [
+                m for m in execution_order
+                if not (m["module_id"] in seen or seen.add(m["module_id"]))
+            ]
+        else:
+            execution_order = get_execution_order(modules)
+        
+        self.logger.info(f"Found {len(modules)} modules")
+        self.logger.info(f"Execution order: {[m['module_id'] for m in execution_order]}")
+        
+        if not execution_order:
+            self.logger.error("No modules to execute!")
+            return False
+        
+        # Start campaign
+        self.logger.start_campaign(
+            "Research Campaign v1",
+            execution_order,
+            list(datasets.keys())
+        )
+        
+        # Run each dataset first (recommended: execute by dataset)
+        all_stats = []
+        index_data = []
+        
+        # Module 112 is a cross-timeframe module.
+        # It must execute once using all available timeframes together.
+        MULTI_TIMEFRAME_MODULES = {"112"}
+        
+        for dataset_name, market_df in datasets.items():
+            self.logger.info(f"\n{'='*60}")
+            self.logger.info(f"PROCESSING DATASET: {dataset_name}")
+            self.logger.info(f"{'='*60}")
+            
+            for module_info in execution_order:
+                module_id = module_info['module_id']
+                
+                # Module 112 is executed separately after all timeframe-specific
+                # modules have completed, because it requires 15m + 1h + 4h together.
+                if module_id in MULTI_TIMEFRAME_MODULES:
+                    continue
+                
+                module_name = module_info.get('module_name', module_id)
+                dependencies = module_info.get('depends_on', [])
+                
+                self.logger.start_module(module_id, dataset_name)
+                
+                try:
+                    start_time = time.time()
+                    
+                    # Validate dependencies
+                    try:
+                        self.dependency_injector.validate_dependencies(
+                            dataset_name, module_id, dependencies, self.completed_modules
+                        )
+                    except RuntimeError as e:
+                        self.logger.error(f"    Dependency validation failed: {e}")
+                        self.results.append({
+                            'module_id': module_id,
+                            'dataset': dataset_name,
+                            'success': False,
+                            'duration': 0,
+                            'error': str(e)
+                        })
+                        continue
+                    
+                    # Create output directory
+                    module_output_dir = (
+                        self.export_manager.raw_dir / 
+                        f"module{module_id}" / 
+                        dataset_name
+                    )
+                    module_output_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Instantiate module
+                    module = self.module_loader.instantiate_module(module_info)
+                    
+                    # ----------------------------------------------------
+                    # Inject dependency features if they exist
+                    # ----------------------------------------------------
+                    if dependencies:
+                        self.dependency_injector.log_dependency_summary(
+                            dataset_name, module_id, dependencies
+                        )
+                        
+                        feature_df = self.dependency_injector.build_feature_dataframe(
+                            dataset_name, dependencies
+                        )
+                        
+                        if feature_df is not None:
+                            module.set_dependency_features(feature_df)
+                            self.logger.info(
+                                f"    Injected {len(feature_df.columns)} "
+                                f"features from {len(dependencies)} modules"
+                            )
+                        else:
+                            self.logger.warning(
+                                f"    No features found for dependencies: {dependencies}"
+                            )
+                    
+                    # ----------------------------------------------------
+                    # Prepare module-specific market DataFrame
+                    # ----------------------------------------------------
+                    module_market_df = market_df.copy()
+                    
+                    # ----------------------------------------------------
+                    # Ensure module-required research targets
+                    # ----------------------------------------------------
+                    required_targets = self.target_manager.get_target_requirements(
+                        module_info
+                    )
+                    
+                    if required_targets:
+                        self.logger.info(
+                            f"    Target requirements for Module {module_id}: "
+                            f"{required_targets}"
+                        )
+                        
+                        module_market_df = self.target_manager.ensure_targets(
+                            module_market_df,
+                            required_targets,
+                            dataset_id=f"{module_id}_{dataset_name}",
+                        )
+                        
+                        # Verify target generation succeeded
+                        missing_targets = [
+                            target
+                            for target in required_targets
+                            if target not in module_market_df.columns
+                        ]
+                        
+                        if missing_targets:
+                            raise RuntimeError(
+                                f"Module {module_id} target preparation failed. "
+                                f"Missing targets: {missing_targets}"
+                            )
+                        
+                        self.logger.info(
+                            f"    Verified required targets for Module {module_id}: "
+                            f"{required_targets}"
+                        )
+                    
+                    # ----------------------------------------------------
+                    # Diagnostic input inspection
+                    # ----------------------------------------------------
+                    self.logger.info(
+                        f"    Module {module_id} input shape: "
+                        f"{module_market_df.shape}"
+                    )
+                    
+                    self.logger.info(
+                        f"    Module {module_id} input columns: "
+                        f"{list(module_market_df.columns)}"
+                    )
+                    
+                    # ----------------------------------------------------
+                    # Run module
+                    # ----------------------------------------------------
+                    result = self.module_loader.run_module(
+                        module,
+                        module_market_df,
+                        dataset_id=f"{module_id}_{dataset_name}",
+                        output_dir=module_output_dir
+                    )
+                    
+                    duration = time.time() - start_time
+                    
+                    # Store artifacts (standardized format) with dataset awareness
+                    if hasattr(result, 'artifacts') and result.artifacts:
+                        self.artifact_store.put(dataset_name, module_id, result.artifacts)
+                        self.logger.info(f"    Stored {len(result.artifacts)} artifacts for {dataset_name}")
+                    
+                    # Export outputs
+                    self.export_manager.export_module_outputs(
+                        module_id,
+                        dataset_name,
+                        result,
+                        module_output_dir
+                    )
+                    
+                    # Extract statistics
+                    stats_df = self.export_manager.consolidate_statistics(
+                        module_id,
+                        dataset_name,
+                        result
+                    )
+                    
+                    # Add metadata
+                    stats_df['timestamp'] = datetime.now().isoformat()
+                    stats_df['duration'] = duration
+                    stats_df['version'] = module_info.get('module_version', 'unknown')
+                    stats_df['has_features'] = self.artifact_store.has(dataset_name, module_id, "features")
+                    stats_df['dataset'] = dataset_name
+                    
+                    all_stats.append(stats_df)
+                    
+                    # FIXED: Use canonical result_succeeded()
+                    success = result_succeeded(result)
+                    
+                    # Build index entry
+                    index_data.append({
+                        'module_id': module_id,
+                        'module_name': module_name,
+                        'dataset': dataset_name,
+                        'status': 'PASS' if success else 'FAIL',
+                        'csv_path': str(module_output_dir),
+                        'execution_time': duration,
+                        'rows': len(stats_df),
+                        'version': module_info.get('module_version', 'unknown'),
+                        'timestamp': datetime.now().isoformat(),
+                        'dependencies': ','.join(dependencies),
+                        'has_features': self.artifact_store.has(dataset_name, module_id, "features")
+                    })
+                    
+                    self.logger.module_result(
+                        module_id,
+                        dataset_name,
+                        success,
+                        duration,
+                        len(stats_df)
+                    )
+                    
+                    # Build and export report
+                    report = self.summary_builder.build_module_report(
+                        module_id,
+                        module_info,
+                        result,
+                        dataset_name,
+                        duration
+                    )
+                    self.export_manager.export_report(
+                        f"{module_id}_{dataset_name}",
+                        report
+                    )
+                    
+                    self.results.append({
+                        'module_id': module_id,
+                        'dataset': dataset_name,
+                        'success': success,
+                        'duration': duration,
+                        'stats_count': len(stats_df)
+                    })
+                    
+                    # FIXED: Mark as completed only when execution actually succeeded.
+                    # Failed modules must never satisfy downstream dependencies.
+                    if success:
+                        self.completed_modules.add((dataset_name, module_id))
+                    
+                except Exception as e:
+                    duration = time.time() - start_time
+                    self.logger.error(f"    ✗ FAILED: {str(e)}")
+                    self.logger.error(traceback.format_exc())
+                    
+                    self.results.append({
+                        'module_id': module_id,
+                        'dataset': dataset_name,
+                        'success': False,
+                        'duration': duration,
+                        'error': str(e)
+                    })
+                    
+                    index_data.append({
+                        'module_id': module_id,
+                        'module_name': module_name,
+                        'dataset': dataset_name,
+                        'status': 'FAIL',
+                        'csv_path': '',
+                        'execution_time': duration,
+                        'rows': 0,
+                        'version': module_info.get('module_version', 'unknown'),
+                        'timestamp': datetime.now().isoformat(),
+                        'dependencies': ','.join(dependencies),
+                        'error': str(e)
+                    })
+        
+        # ============================================================
+        # MODULE 112 - CROSS-TIMEFRAME EXECUTION
+        # ============================================================
+        #
+        # Module 112 must receive dependency-enriched feature
+        # DataFrames for ALL available timeframes simultaneously.
+        #
+        # Normal modules run:
+        #     dataset -> module
+        #
+        # Module 112 runs:
+        #     all datasets -> module 112
+        #
+        # ============================================================
+
+        module112_info = None
+
+        for module_info in execution_order:
+            if module_info["module_id"] == "112":
+                module112_info = module_info
+                break
+
+        if module112_info is not None:
+
+            module_id = "112"
+            module_name = module112_info.get("module_name", module_id)
+            dependencies = module112_info.get("depends_on", [])
+
+            self.logger.info("")
+            self.logger.info("=" * 60)
+            self.logger.info("PROCESSING MODULE 112 - CROSS-TIMEFRAME")
+            self.logger.info("=" * 60)
+            self.logger.info(
+                f"Module 112 dependencies: {dependencies}"
+            )
+
+            try:
+                start_time = time.time()
+
+                # ----------------------------------------------------
+                # Determine target requirements for Module 112
+                # ----------------------------------------------------
+                required_targets = self.target_manager.get_target_requirements(
+                    module112_info
+                )
+
+                if required_targets:
+                    self.logger.info(
+                        f"  Module 112 target requirements: "
+                        f"{required_targets}"
+                    )
+
+                # ----------------------------------------------------
+                # Validate dependencies for EVERY timeframe
+                # and build target-enriched datasets
+                # ----------------------------------------------------
+                module112_datasets = {}
+
+                for dataset_name, market_df in datasets.items():
+
+                    self.logger.info(
+                        f"  Building Module 112 features for {dataset_name}"
+                    )
+
+                    self.dependency_injector.validate_dependencies(
+                        dataset_name,
+                        module_id,
+                        dependencies,
+                        self.completed_modules
+                    )
+
+                    # Start from ORIGINAL market/OHLCV data
+                    module_market_df = market_df.copy()
+
+                    # Build dependency features
+                    feature_df = self.dependency_injector.build_feature_dataframe(
+                        dataset_name,
+                        dependencies
+                    )
+
+                    if feature_df is None:
+                        raise RuntimeError(
+                            f"No dependency features found for Module 112 "
+                            f"on timeframe {dataset_name}"
+                        )
+
+                    # Attach dependency features to the market dataframe
+                    module_market_df = pd.concat(
+                        [
+                            module_market_df.reset_index(drop=True),
+                            feature_df.reset_index(drop=True)
+                        ],
+                        axis=1
+                    )
+
+                    # Generate targets using the OHLCV-containing dataframe
+                    if required_targets:
+                        module_market_df = self.target_manager.ensure_targets(
+                            module_market_df,
+                            required_targets,
+                            dataset_id=f"{module_id}_{dataset_name}",
+                        )
+
+                        missing_targets = [
+                            target
+                            for target in required_targets
+                            if target not in module_market_df.columns
+                        ]
+
+                        if missing_targets:
+                            raise RuntimeError(
+                                f"Module 112 target preparation failed "
+                                f"on timeframe {dataset_name}. "
+                                f"Missing targets: {missing_targets}"
+                            )
+
+                        self.logger.info(
+                            f"    {dataset_name}: targets ensured "
+                            f"{required_targets}"
+                        )
+
+                    module112_datasets[dataset_name] = module_market_df
+
+                    self.logger.info(
+                        f"    {dataset_name}: "
+                        f"{len(module_market_df)} rows, "
+                        f"{len(module_market_df.columns)} columns"
+                    )
+
+                # ----------------------------------------------------
+                # Instantiate Module 112
+                # ----------------------------------------------------
+                module112 = self.module_loader.instantiate_module(
+                    module112_info
+                )
+
+                # ----------------------------------------------------
+                # Create dedicated output directory
+                # ----------------------------------------------------
+                module112_output_dir = (
+                    self.export_manager.raw_dir
+                    / "module112"
+                    / "multi"
+                )
+
+                module112_output_dir.mkdir(
+                    parents=True,
+                    exist_ok=True
+                )
+
+                # ----------------------------------------------------
+                # Run Module 112 ONCE across all timeframes
+                # ----------------------------------------------------
+                result = module112.run_datasets(
+                    module112_datasets,
+                    dataset_id="112_multi",
+                    output_dir=module112_output_dir
+                )
+
+                duration = time.time() - start_time
+
+                # ----------------------------------------------------
+                # Store artifacts under a dedicated multi-timeframe key
+                # ----------------------------------------------------
+                if hasattr(result, "artifacts") and result.artifacts:
+                    self.artifact_store.put(
+                        "multi",
+                        module_id,
+                        result.artifacts
+                    )
+
+                    self.logger.info(
+                        f"    Stored {len(result.artifacts)} artifacts "
+                        f"for Module 112"
+                    )
+
+                # ----------------------------------------------------
+                # Export outputs
+                # ----------------------------------------------------
+                self.export_manager.export_module_outputs(
+                    module_id,
+                    "multi",
+                    result,
+                    module112_output_dir
+                )
+
+                # ----------------------------------------------------
+                # Extract statistics
+                # ----------------------------------------------------
+                stats_df = self.export_manager.consolidate_statistics(
+                    module_id,
+                    "multi",
+                    result
+                )
+
+                stats_df["timestamp"] = datetime.now().isoformat()
+                stats_df["duration"] = duration
+                stats_df["version"] = module112_info.get(
+                    "module_version",
+                    "unknown"
+                )
+                stats_df["dataset"] = "multi"
+                stats_df["has_features"] = (
+                    self.artifact_store.has(
+                        "multi",
+                        module_id,
+                        "features"
+                    )
+                )
+
+                all_stats.append(stats_df)
+
+                # ----------------------------------------------------
+                # Determine success
+                # ----------------------------------------------------
+                success = result_succeeded(result)
+
+                index_data.append({
+                    "module_id": module_id,
+                    "module_name": module_name,
+                    "dataset": "multi",
+                    "status": "PASS" if success else "FAIL",
+                    "csv_path": str(module112_output_dir),
+                    "execution_time": duration,
+                    "rows": len(stats_df),
+                    "version": module112_info.get(
+                        "module_version",
+                        "unknown"
+                    ),
+                    "timestamp": datetime.now().isoformat(),
+                    "dependencies": ",".join(dependencies),
+                    "has_features": self.artifact_store.has(
+                        "multi",
+                        module_id,
+                        "features"
+                    )
+                })
+
+                self.logger.module_result(
+                    module_id,
+                    "multi",
+                    success,
+                    duration,
+                    len(stats_df)
+                )
+
+                # ----------------------------------------------------
+                # Build and export Module 112 report
+                # ----------------------------------------------------
+                report = self.summary_builder.build_module_report(
+                    module_id,
+                    module112_info,
+                    result,
+                    "multi",
+                    duration
+                )
+
+                self.export_manager.export_report(
+                    "112_multi",
+                    report
+                )
+
+                self.results.append({
+                    "module_id": module_id,
+                    "dataset": "multi",
+                    "success": success,
+                    "duration": duration,
+                    "stats_count": len(stats_df)
+                })
+
+                # Module 112 completed successfully
+                if success:
+                    self.completed_modules.add(
+                        ("multi", module_id)
+                    )
+
+            except Exception as e:
+
+                duration = time.time() - start_time
+
+                self.logger.error(
+                    f"    ✗ Module 112 FAILED: {str(e)}"
+                )
+                self.logger.error(
+                    traceback.format_exc()
+                )
+
+                self.results.append({
+                    "module_id": "112",
+                    "dataset": "multi",
+                    "success": False,
+                    "duration": duration,
+                    "error": str(e)
+                })
+
+                index_data.append({
+                    "module_id": "112",
+                    "module_name": module112_info.get(
+                        "module_name",
+                        "112"
+                    ),
+                    "dataset": "multi",
+                    "status": "FAIL",
+                    "csv_path": "",
+                    "execution_time": duration,
+                    "rows": 0,
+                    "version": module112_info.get(
+                        "module_version",
+                        "unknown"
+                    ),
+                    "timestamp": datetime.now().isoformat(),
+                    "dependencies": ",".join(
+                        module112_info.get(
+                            "depends_on",
+                            []
+                        )
+                    ),
+                    "error": str(e)
+                })
+        
+        self.end_time = time.time()
+        total_time = self.end_time - self.start_time
+        
+        # Save target generation log
+        target_log = self.target_manager.get_target_log()
+        if target_log:
+            target_log_path = self.output_dir / "target_log.json"
+            with open(target_log_path, 'w', encoding='utf-8') as f:
+                json.dump(target_log, f, indent=2, default=str)
+            self.logger.info(f"Saved target log: {target_log_path}")
+        
+        # Consolidate all statistics
+        if all_stats:
+            master_df = pd.concat(all_stats, ignore_index=True)
+            self.export_manager.save_master_database(master_df)
+            self.logger.info(f"Saved master database: {len(master_df)} rows")
+        
+        # Save research index
+        index_df = pd.DataFrame(index_data)
+        self.export_manager.save_research_index(index_df)
+        self.logger.info(f"Saved research index: {len(index_df)} entries")
+        
+        # Save injection log
+        injection_log = self.dependency_injector.get_injection_log()
+        injection_path = self.output_dir / "injection_log.json"
+        with open(injection_path, 'w', encoding='utf-8') as f:
+            json.dump(injection_log, f, indent=2, default=str)
+        self.logger.info(f"Saved injection log: {injection_path}")
+        
+        # Generate campaign summary
+        summary = self.summary_builder.build_campaign_summary(
+            self.results,
+            total_time
+        )
+        summary_path = self.output_dir / "campaign_summary.txt"
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(summary)
+        self.logger.info(f"Saved campaign summary: {summary_path}")
+        
+        # Save artifact store summary
+        artifact_summary = self.artifact_store.summary()
+        artifact_path = self.output_dir / "artifact_summary.json"
+        with open(artifact_path, 'w', encoding='utf-8') as f:
+            json.dump(artifact_summary, f, indent=2)
+        self.logger.info(f"Saved artifact summary: {artifact_path}")
+        
+        # Finish campaign
+        total_success = sum(1 for r in self.results if r.get('success', False))
+        self.logger.finish_campaign(len(self.results), total_success, total_time)
+        
+        return total_success == len(self.results)
+
+
+def main():
+    """Main entry point."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Research Runner for Project Atlas")
+    parser.add_argument(
+        "--data-path",
+        type=str,
+        default=str(DEFAULT_DATA_PATH),
+        help="Path to raw data directory"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=str(PROJECT_ROOT / "research_results"),
+        help="Output directory for results"
+    )
+    parser.add_argument(
+        "--modules",
+        type=str,
+        nargs='+',
+        help="Specific module IDs to run (e.g., 001 010 111)"
+    )
+    parser.add_argument(
+        "--timeframes",
+        type=str,
+        nargs='+',
+        default=['15m', '1h', '4h'],
+        help="Timeframes to analyze"
+    )
+    
+    args = parser.parse_args()
+    
+    print("=" * 60)
+    print("PROJECT ATLAS - RESEARCH RUNNER")
+    print("=" * 60)
+    print(f"\nProject Root: {PROJECT_ROOT}")
+    print(f"Data Path: {args.data_path}")
+    print(f"Output Dir: {args.output_dir}")
+    print(f"Timeframes: {args.timeframes}")
+    print(f"Modules: {args.modules if args.modules else 'ALL'}")
+    print("\n" + "-" * 60)
+    
+    runner = ResearchRunner(
+        data_path=Path(args.data_path),
+        output_dir=Path(args.output_dir),
+        modules_filter=args.modules
+    )
+    
+    success = runner.run()
+    
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()

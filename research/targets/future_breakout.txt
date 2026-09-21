@@ -1,0 +1,184 @@
+"""
+Future Breakout Target Generator
+
+Generates binary breakout targets without look-ahead leakage.
+"""
+
+import numpy as np
+import pandas as pd
+from typing import Optional, Dict, Any
+
+# Default configuration
+TARGET_CONFIG = {
+    "horizon": 10,           # Number of bars to look ahead
+    "multiplier": 2.0,       # Breakout threshold multiplier (k)
+    "volatility_window": 20, # Rolling volatility window
+}
+
+
+def generate_future_breakout(
+    df: pd.DataFrame,
+    config: Optional[Dict[str, Any]] = None,
+    price_column: str = "close",
+    high_column: str = "high",
+) -> pd.Series:
+    """
+    Generate future_breakout target without look-ahead leakage.
+
+    The target at row t describes whether price breaks out during
+    bars t+1 through t+H (exclusive of bar t, inclusive of t+H).
+
+    Args:
+        df: Input DataFrame with OHLCV columns
+        config: Configuration dictionary (horizon, multiplier, volatility_window)
+        price_column: Column name for close price
+        high_column: Column name for high price
+
+    Returns:
+        Series: future_breakout with NaN for final H rows
+
+    Raises:
+        ValueError: If required columns are missing or configuration is invalid
+    """
+    if config is None:
+        config = TARGET_CONFIG.copy()
+
+    horizon = config.get("horizon", 10)
+    multiplier = config.get("multiplier", 2.0)
+    volatility_window = config.get("volatility_window", 20)
+
+    if horizon <= 0:
+        raise ValueError("Horizon must be > 0")
+
+    if multiplier <= 0:
+        raise ValueError("Multiplier must be > 0")
+
+    if volatility_window <= 0:
+        raise ValueError("Volatility_window must be > 0")
+
+    # Validate required columns
+    required_cols = [price_column, high_column]
+    missing = set(required_cols) - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns: {missing}")
+
+    # Calculate rolling volatility
+    returns = df[price_column].pct_change()
+    volatility = returns.rolling(window=volatility_window).std()
+
+    # Calculate threshold for each row
+    threshold = df[price_column] * (1 + multiplier * volatility)
+
+    # Initialize target with NaN
+    target = pd.Series(index=df.index, dtype=float)
+    target[:] = np.nan
+
+    # For each valid row (where we have enough future data)
+    n = len(df)
+    valid_rows = n - horizon
+
+    for i in range(valid_rows):
+        # Get future highs from t+1 to t+horizon
+        future_highs = df[high_column].iloc[i+1:i+horizon+1]
+
+        if len(future_highs) < horizon:
+            continue
+
+        # Check if any future high exceeds threshold
+        max_future_high = future_highs.max()
+
+        if pd.isna(max_future_high) or pd.isna(threshold.iloc[i]):
+            target.iloc[i] = np.nan
+        else:
+            target.iloc[i] = 1.0 if max_future_high >= threshold.iloc[i] else 0.0
+
+    # Final horizon rows remain NaN
+    # This is already set by initialization
+
+    return target
+
+
+def add_future_breakout(
+    df: pd.DataFrame,
+    config: Optional[Dict[str, Any]] = None,
+    price_column: str = "close",
+    high_column: str = "high",
+) -> pd.DataFrame:
+    """
+    Add future_breakout column to DataFrame.
+
+    Args:
+        df: Input DataFrame
+        config: Configuration dictionary
+        price_column: Column name for close price
+        high_column: Column name for high price
+
+    Returns:
+        DataFrame: Original DataFrame with future_breakout column added
+    """
+    df = df.copy()
+    df["future_breakout"] = generate_future_breakout(
+        df,
+        config=config,
+        price_column=price_column,
+        high_column=high_column,
+    )
+    return df
+
+
+def validate_target(
+    target: pd.Series,
+    horizon: int,
+    expected_positive_ratio: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Validate the generated target.
+
+    Args:
+        target: The future_breakout series
+        horizon: The prediction horizon
+        expected_positive_ratio: Optional expected ratio of positive labels
+
+    Returns:
+        Dict: Validation results
+    """
+    n = len(target)
+    valid_mask = pd.notna(target)
+    valid_count = valid_mask.sum()
+    invalid_count = n - valid_count
+
+    results = {
+        "total_rows": n,
+        "valid_rows": valid_count,
+        "invalid_rows": invalid_count,
+        "expected_invalid_rows": horizon,
+        "valid_rows_match_expected": invalid_count == horizon,
+        "positive_count": int(target[valid_mask].sum()),
+        "positive_ratio": float(target[valid_mask].mean()) if valid_count > 0 else 0.0,
+        "all_binary": target[valid_mask].isin([0, 1]).all(),
+        "no_leakage": True,  # Structural property
+        "is_valid": False,
+    }
+
+    # Check that invalid rows = horizon
+    if invalid_count != horizon:
+        results["error"] = f"Expected {horizon} invalid rows, got {invalid_count}"
+
+    # Check that all valid values are binary
+    if not target[valid_mask].isin([0, 1]).all():
+        results["error"] = "Non-binary values found in valid rows"
+
+    # Check expected positive ratio if provided
+    if expected_positive_ratio is not None and valid_count > 0:
+        actual = results["positive_ratio"]
+        results["expected_positive_ratio"] = expected_positive_ratio
+        results["positive_ratio_deviation"] = abs(actual - expected_positive_ratio)
+        results["positive_ratio_plausible"] = actual > 0.01 and actual < 0.99
+
+    results["is_valid"] = (
+        results["valid_rows_match_expected"]
+        and results["all_binary"]
+        and valid_count > 0
+    )
+
+    return results

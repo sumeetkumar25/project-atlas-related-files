@@ -1,0 +1,144 @@
+"""
+Dataset Registry - Centralizes dataset loading for research.
+"""
+
+import pandas as pd
+from pathlib import Path
+from typing import Dict, Optional, List
+
+
+# Import canonical fingerprint implementation
+from atlas.framework.metadata import DatasetFingerprint
+
+
+class DatasetRegistry:
+    """Registry for loading and managing BTC datasets."""
+    
+    def __init__(self, data_path: Path = None):
+        """
+        Initialize the dataset registry.
+        
+        Args:
+            data_path: Path to raw data directory
+        """
+        if data_path is None:
+            PROJECT_ROOT = Path(__file__).resolve().parents[2]
+            data_path = PROJECT_ROOT / "data" / "raw"
+        
+        self.data_path = Path(data_path)
+        self.datasets = {}
+        self.dataset_metadata = {}
+        
+    def load_all(self) -> Dict[str, pd.DataFrame]:
+        """
+        Load all available BTC datasets.
+        
+        Returns:
+            dict: {timeframe: DataFrame}
+        """
+        self.datasets = {}
+        
+        for timeframe in ['15m', '1h', '4h']:
+            df = self.load_dataset(timeframe)
+            if df is not None:
+                self.datasets[timeframe] = df
+                
+        return self.datasets
+    
+    def load_dataset(self, timeframe: str) -> Optional[pd.DataFrame]:
+        """
+        Load a specific dataset.
+        
+        Args:
+            timeframe: '15m', '1h', or '4h'
+        
+        Returns:
+            DataFrame or None if not found
+        """
+        # Try different file extensions
+        extensions = ['.parquet', '.csv']
+        
+        for ext in extensions:
+            filepath = self.data_path / f"BTCUSD_{timeframe}{ext}"
+            if filepath.exists():
+                try:
+                    if ext == '.parquet':
+                        df = pd.read_parquet(filepath)
+                    else:
+                        df = pd.read_csv(filepath)
+                    
+                    # Ensure timestamp column is datetime
+                    if 'timestamp' in df.columns:
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    elif 'date' in df.columns:
+                        df['timestamp'] = pd.to_datetime(df['date'])
+                        df.rename(columns={'date': 'timestamp'}, inplace=True)
+                    
+                    # Compute canonical SHA256 fingerprint
+                    fingerprint = DatasetFingerprint.create_fingerprint(
+                        str(filepath),
+                        df
+                    )
+                    
+                    # Store metadata with canonical fingerprint
+                    self.dataset_metadata[timeframe] = {
+                        'path': str(filepath),
+                        'rows': len(df),
+                        'columns': list(df.columns),
+                        'fingerprint': fingerprint,
+                        'timeframe': timeframe,
+                        'start_date': df['timestamp'].min() if 'timestamp' in df.columns else None,
+                        'end_date': df['timestamp'].max() if 'timestamp' in df.columns else None
+                    }
+                    
+                    print(f"  ✓ Loaded BTCUSD_{timeframe}: {len(df)} rows")
+                    return df
+                    
+                except Exception as e:
+                    print(f"  ✗ Error loading BTCUSD_{timeframe}: {e}")
+                    return None
+        
+        print(f"  ✗ BTCUSD_{timeframe} not found in {self.data_path}")
+        return None
+    
+    def _compute_fingerprint(self, df: pd.DataFrame) -> str:
+        """
+        Compute canonical SHA256 fingerprint for dataset contents.
+        
+        Args:
+            df: DataFrame to fingerprint
+        
+        Returns:
+            str: SHA256 hash of the dataset
+        """
+        try:
+            return DatasetFingerprint.compute_dataframe_hash(df)
+        except Exception:
+            return "unknown"
+    
+    def get_metadata(self, timeframe: str) -> Dict:
+        """Get metadata for a specific dataset."""
+        return self.dataset_metadata.get(timeframe, {})
+    
+    def get_all_metadata(self) -> Dict:
+        """Get metadata for all loaded datasets."""
+        return self.dataset_metadata
+    
+    def get_feature_columns(self, timeframe: str) -> List[str]:
+        """Get feature columns for a dataset."""
+        df = self.datasets.get(timeframe)
+        if df is None:
+            return []
+        
+        exclude = ['timestamp', 'date', 'open', 'high', 'low', 'close', 'volume']
+        return [col for col in df.columns if col not in exclude]
+
+
+def get_dataset_info(timeframe: str) -> str:
+    """Get a human-readable description of a dataset."""
+    descriptions = {
+        '15m': '15-minute candles (high frequency, ~96 bars/day)',
+        '1h': '1-hour candles (medium frequency, ~24 bars/day)',
+        '4h': '4-hour candles (low frequency, ~6 bars/day)'
+    }
+    return descriptions.get(timeframe, timeframe)

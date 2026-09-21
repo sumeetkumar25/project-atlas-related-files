@@ -1,0 +1,14 @@
+# Run the full research campaign
+python -m atlas.research.research_runner
+
+# Run specific modules only
+python -m atlas.research.research_runner --modules 001 010 111 210
+
+# Run with custom data path
+python -m atlas.research.research_runner --data-path "D:/delta_bot/Project_Atlas/data/raw"
+
+# Aggregate all results
+python -m atlas.research.aggregate_results
+
+# Generate research summary
+python -m atlas.research.generate_research_summary

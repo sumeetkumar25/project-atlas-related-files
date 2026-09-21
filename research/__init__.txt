@@ -1,0 +1,27 @@
+"""
+Project Atlas Research Package
+
+Provides research campaign execution, module loading,
+dependency injection, and target generation.
+"""
+
+from .research_runner import ResearchRunner
+from .module_loader import ModuleLoader
+from .dataset_registry import DatasetRegistry
+from .export_manager import ExportManager
+from .research_logger import ResearchLogger
+from .summary_builder import SummaryBuilder
+from .topological_sort import topological_sort, get_execution_order
+from .target_manager import TargetManager
+
+__all__ = [
+    "ResearchRunner",
+    "ModuleLoader",
+    "DatasetRegistry",
+    "ExportManager",
+    "ResearchLogger",
+    "SummaryBuilder",
+    "topological_sort",
+    "get_execution_order",
+    "TargetManager",
+]

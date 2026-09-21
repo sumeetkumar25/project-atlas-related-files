@@ -1,0 +1,185 @@
+"""
+Generate Research Summary - Creates comprehensive research reports.
+"""
+
+import pandas as pd
+from pathlib import Path
+from datetime import datetime
+from typing import Optional
+
+
+def generate_summary(
+    research_dir: Path,
+    output_file: Optional[Path] = None
+) -> str:
+    """
+    Generate a research summary report.
+    
+    Args:
+        research_dir: Path to research_results directory
+        output_file: Path to output file (optional)
+    
+    Returns:
+        str: Summary report
+    """
+    research_dir = Path(research_dir)
+    
+    if output_file is None:
+        output_file = research_dir / "research_summary.md"
+    
+    # Load master database
+    master_path = research_dir / "master_database.csv"
+    if not master_path.exists():
+        return "No master database found. Run research_runner.py first."
+    
+    master = pd.read_csv(master_path)
+    
+    # Load research index
+    index_path = research_dir / "research_index.csv"
+    index = pd.read_csv(index_path) if index_path.exists() else None
+    
+    lines = []
+    
+    lines.append("# Project Atlas - Research Summary")
+    lines.append("")
+    lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+    
+    # Overview
+    lines.append("## Overview")
+    lines.append("")
+    lines.append(f"- **Total Records**: {len(master):,}")
+    lines.append(f"- **Unique Modules**: {master['module_id'].nunique()}")
+    lines.append(f"- **Datasets**: {', '.join(sorted(master['dataset'].unique()))}")
+    lines.append(f"- **Statistics**: {len(master['statistic'].unique())}")
+    lines.append("")
+    
+    if index is not None:
+        passed = len(index[index['status'] == 'PASS'])
+        failed = len(index[index['status'] == 'FAIL'])
+        lines.append(f"- **Passed**: {passed}")
+        lines.append(f"- **Failed**: {failed}")
+        lines.append(f"- **Success Rate**: {(passed/(passed+failed)*100):.1f}%")
+        lines.append("")
+    
+    # Top Modules
+    lines.append("## Top Modules by Statistics Count")
+    lines.append("")
+    module_stats = master.groupby('module_id').size().sort_values(ascending=False)
+    lines.append("| Module | Statistics |")
+    lines.append("|--------|------------|")
+    for module, count in module_stats.head(10).items():
+        lines.append(f"| {module} | {count:,} |")
+    lines.append("")
+    
+    # Top Statistics
+    lines.append("## Most Common Statistics")
+    lines.append("")
+    stat_counts = master['statistic'].value_counts().head(10)
+    lines.append("| Statistic | Count |")
+    lines.append("|-----------|-------|")
+    for stat, count in stat_counts.items():
+        lines.append(f"| {stat} | {count:,} |")
+    lines.append("")
+    
+    # Dataset Coverage
+    lines.append("## Dataset Coverage")
+    lines.append("")
+    dataset_stats = master.groupby('dataset').size()
+    lines.append("| Dataset | Records |")
+    lines.append("|---------|---------|")
+    for dataset, count in dataset_stats.items():
+        lines.append(f"| {dataset} | {count:,} |")
+    lines.append("")
+    
+    # Statistics Summary
+    lines.append("## Statistics Summary")
+    lines.append("")
+    numeric_cols = master.select_dtypes(include=['float64', 'int64']).columns
+    numeric_cols = [c for c in numeric_cols if c not in ['module_id']]
+    
+    if numeric_cols:
+        lines.append("| Statistic | Mean | Std | Min | Max |")
+        lines.append("|-----------|------|-----|-----|-----|")
+        for col in numeric_cols[:10]:
+            lines.append(
+                f"| {col} | "
+                f"{master[col].mean():.4f} | "
+                f"{master[col].std():.4f} | "
+                f"{master[col].min():.4f} | "
+                f"{master[col].max():.4f} |"
+            )
+        lines.append("")
+    
+    # Failed Modules (if any)
+    if index is not None:
+        failed_modules = index[index['status'] == 'FAIL']
+        if not failed_modules.empty:
+            lines.append("## Failed Modules")
+            lines.append("")
+            lines.append("| Module | Dataset | Error |")
+            lines.append("|--------|---------|-------|")
+            for _, row in failed_modules.iterrows():
+                error = row.get('error', 'Unknown')[:100]
+                lines.append(f"| {row['module_id']} | {row['dataset']} | {error} |")
+            lines.append("")
+    
+    # Interpretation
+    lines.append("## Interpretation")
+    lines.append("")
+    
+    if len(master) > 1000:
+        lines.append("✅ **Robust Data**: A large number of statistics have been collected.")
+    else:
+        lines.append("⚠️ **Limited Data**: Consider running more modules or datasets.")
+    
+    if index is not None:
+        success_rate = passed / (passed + failed) if (passed + failed) > 0 else 0
+        if success_rate > 0.9:
+            lines.append("✅ **High Success Rate**: Most modules completed successfully.")
+        elif success_rate > 0.7:
+            lines.append("✓ **Moderate Success Rate**: Some modules failed.")
+        else:
+            lines.append("⚠️ **Low Success Rate**: Many modules failed. Check logs.")
+    
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("*Generated by Project Atlas Research Framework*")
+    
+    summary = "\n".join(lines)
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(summary)
+    
+    print(f"Summary saved to: {output_file}")
+    return summary
+
+
+def main():
+    """Main entry point."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Generate Research Summary")
+    parser.add_argument(
+        "--research-dir",
+        type=str,
+        default="research_results",
+        help="Path to research_results directory"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="Output file path"
+    )
+    
+    args = parser.parse_args()
+    
+    generate_summary(
+        Path(args.research_dir),
+        Path(args.output) if args.output else None
+    )
+
+
+if __name__ == "__main__":
+    main()

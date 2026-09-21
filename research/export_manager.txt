@@ -1,0 +1,195 @@
+"""
+Export Manager - Centralizes export of research results.
+"""
+
+import pandas as pd
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+import json
+import shutil
+
+
+class ExportManager:
+    """Manager for exporting research results."""
+    
+    def __init__(self, base_output_dir: Path):
+        """
+        Initialize the export manager.
+        
+        Args:
+            base_output_dir: Base directory for outputs
+        """
+        self.base_output_dir = Path(base_output_dir)
+        self.base_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create subdirectories
+        self.raw_dir = self.base_output_dir / "raw"
+        self.consolidated_dir = self.base_output_dir / "consolidated"
+        self.reports_dir = self.base_output_dir / "reports"
+        self.cross_module_dir = self.base_output_dir / "cross_module_analysis"
+        
+        for d in [self.raw_dir, self.consolidated_dir, self.reports_dir, self.cross_module_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+    
+    def export_module_outputs(
+        self,
+        module_id: str,
+        dataset: str,
+        result: Any,
+        output_dir: Optional[Path] = None
+    ) -> Dict[str, Path]:
+        """
+        Export outputs from a module run.
+        
+        Args:
+            module_id: Module identifier
+            dataset: Dataset timeframe
+            result: Result object from module
+            output_dir: Specific output directory (optional)
+        
+        Returns:
+            dict: {artifact_name: filepath}
+        """
+        outputs = {}
+        
+        # Determine target directory
+        if output_dir is None:
+            target_dir = self.raw_dir / f"module{module_id}" / dataset
+        else:
+            target_dir = Path(output_dir)
+        
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Extract artifacts from result
+        artifacts = {}
+        if hasattr(result, 'artifacts'):
+            artifacts = result.artifacts
+        elif hasattr(result, 'Artifacts'):
+            artifacts = result.Artifacts
+        
+        # Export each artifact
+        for name, data in artifacts.items():
+            if data is None:
+                continue
+            
+            filepath = target_dir / f"{name}.csv"
+            
+            try:
+                if isinstance(data, pd.DataFrame):
+                    data.to_csv(filepath, index=False)
+                    outputs[name] = filepath
+                elif isinstance(data, (dict, list)):
+                    with open(filepath.with_suffix('.json'), 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2, default=str)
+                    outputs[name] = filepath.with_suffix('.json')
+                elif isinstance(data, str):
+                    with open(filepath.with_suffix('.txt'), 'w', encoding='utf-8') as f:
+                        f.write(data)
+                    outputs[name] = filepath.with_suffix('.txt')
+                else:
+                    # Try to convert to string
+                    with open(filepath.with_suffix('.txt'), 'w', encoding='utf-8') as f:
+                        f.write(str(data))
+                    outputs[name] = filepath.with_suffix('.txt')
+            except Exception as e:
+                print(f"    ⚠ Could not export {name}: {e}")
+        
+        return outputs
+    
+    def consolidate_statistics(self, module_id: str, dataset: str, result: Any) -> pd.DataFrame:
+        """
+        Extract statistics from a module result into a DataFrame.
+        
+        Args:
+            module_id: Module identifier
+            dataset: Dataset timeframe
+            result: Result object from module
+        
+        Returns:
+            DataFrame: Consolidated statistics
+        """
+        stats = []
+        
+        # Try to get statistics from result
+        if hasattr(result, 'statistics') and result.statistics:
+            stats_dict = result.statistics
+            if isinstance(stats_dict, dict):
+                for key, value in stats_dict.items():
+                    if isinstance(value, (int, float, bool)):
+                        stats.append({
+                            'module_id': module_id,
+                            'dataset': dataset,
+                            'statistic': key,
+                            'value': value
+                        })
+        
+        # Also try from result object attributes
+        if hasattr(result, '__dict__'):
+            for key, value in result.__dict__.items():
+                if isinstance(value, (int, float, bool)) and not key.startswith('_'):
+                    # Check if not already added
+                    if not any(s['statistic'] == key for s in stats):
+                        stats.append({
+                            'module_id': module_id,
+                            'dataset': dataset,
+                            'statistic': key,
+                            'value': value
+                        })
+        
+        # Also check for summary_statistics
+        if hasattr(result, 'summary_statistics') and result.summary_statistics:
+            for key, value in result.summary_statistics.items():
+                if isinstance(value, (int, float, bool)):
+                    if not any(s['statistic'] == f"summary_{key}" for s in stats):
+                        stats.append({
+                            'module_id': module_id,
+                            'dataset': dataset,
+                            'statistic': f"summary_{key}",
+                            'value': value
+                        })
+        
+        return pd.DataFrame(stats)
+    
+    def save_master_database(self, all_stats: pd.DataFrame) -> Path:
+        """
+        Save the master database of all statistics.
+        
+        Args:
+            all_stats: Consolidated statistics DataFrame
+        
+        Returns:
+            Path: Path to saved file
+        """
+        filepath = self.base_output_dir / "master_database.csv"
+        all_stats.to_csv(filepath, index=False)
+        return filepath
+    
+    def save_research_index(self, index_data: pd.DataFrame) -> Path:
+        """
+        Save the research index.
+        
+        Args:
+            index_data: Research index DataFrame
+        
+        Returns:
+            Path: Path to saved file
+        """
+        filepath = self.base_output_dir / "research_index.csv"
+        index_data.to_csv(filepath, index=False)
+        return filepath
+    
+    def export_report(self, module_id: str, report: str) -> Path:
+        """
+        Export a module report as markdown.
+        
+        Args:
+            module_id: Module identifier
+            report: Report content
+        
+        Returns:
+            Path: Path to saved file
+        """
+        filepath = self.reports_dir / f"{module_id}.md"
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(report)
+        return filepath

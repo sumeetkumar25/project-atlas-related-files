@@ -1,0 +1,1529 @@
+"""
+Aggregate Results - Loads all module results into a unified database.
+"""
+
+import pandas as pd
+from pathlib import Path
+from typing import Optional
+
+
+def aggregate_results(
+    research_dir: Path,
+    output_file: Optional[Path] = None
+) -> pd.DataFrame:
+    """
+    Aggregate all module results into a single master database.
+    
+    Args:
+        research_dir: Path to research_results directory
+        output_file: Path to output file (optional)
+    
+    Returns:
+        DataFrame: Aggregated results
+    """
+    research_dir = Path(research_dir)
+    
+    if output_file is None:
+        output_file = research_dir / "master_database_aggregated.csv"
+
+
+"""
+Dataset Registry - Centralizes dataset loading for research.
+"""
+
+import pandas as pd
+from pathlib import Path
+from typing import Dict, Optional, List
+import hashlib
+import json
+
+
+class DatasetRegistry:
+    """Registry for loading and managing BTC datasets."""
+    
+    def __init__(self, data_path: Path = None):
+        """
+        Initialize the dataset registry.
+        
+        Args:
+            data_path: Path to raw data directory
+        """
+        if data_path is None:
+            PROJECT_ROOT = Path(__file__).resolve().parents[2]
+            data_path = PROJECT_ROOT / "data" / "raw"
+        
+        self.data_path = Path(data_path)
+        self.datasets = {}
+        self.dataset_metadata = {}
+        
+    def load_all(self) -> Dict[str, pd.DataFrame]:
+        """
+        Load all available BTC datasets.
+        
+        Returns:
+            dict: {timeframe: DataFrame}
+        """
+        self.datasets = {}
+        
+        for timeframe in ['15m', '1h', '4h']:
+            df = self.load_dataset(timeframe)
+            if df is not None:
+                self.datasets[timeframe] = df
+                
+        return self.datasets
+    
+    def load_dataset(self, timeframe: str) -> Optional[pd.DataFrame]:
+        """
+        Load a specific dataset.
+        
+        Args:
+            timeframe: '15m', '1h', or '4h'
+        
+        Returns:
+            DataFrame or None if not found
+        """
+        # Try different file extensions
+        extensions = ['.parquet', '.csv']
+        
+        for ext in extensions:
+            filepath = self.data_path / f"BTCUSD_{timeframe}{ext}"
+            if filepath.exists():
+                try:
+                    if ext == '.parquet':
+                        df = pd.read_parquet(filepath)
+                    else:
+                        df = pd.read_csv(filepath)
+                    
+                    # Ensure timestamp column is datetime
+                    if 'timestamp' in df.columns:
+                        df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    elif 'date' in df.columns:
+                        df['timestamp'] = pd.to_datetime(df['date'])
+                        df.rename(columns={'date': 'timestamp'}, inplace=True)
+                    
+                    # Store metadata
+                    self.dataset_metadata[timeframe] = {
+                        'path': str(filepath),
+                        'rows': len(df),
+                        'columns': list(df.columns),
+                        'fingerprint': self._compute_fingerprint(df),
+                        'timeframe': timeframe,
+                        'start_date': df['timestamp'].min() if 'timestamp' in df.columns else None,
+                        'end_date': df['timestamp'].max() if 'timestamp' in df.columns else None
+                    }
+                    
+                    print(f"  ✓ Loaded BTCUSD_{timeframe}: {len(df)} rows")
+                    return df
+                    
+                except Exception as e:
+                    print(f"  ✗ Error loading BTCUSD_{timeframe}: {e}")
+                    return None
+        
+        print(f"  ✗ BTCUSD_{timeframe} not found in {self.data_path}")
+        return None
+    
+    def _compute_fingerprint(self, df: pd.DataFrame) -> str:
+        """Compute a fingerprint for the dataset."""
+        try:
+            # Use hash of shape and first/last timestamps
+            if 'timestamp' in df.columns:
+                data_str = f"{len(df)}_{df['timestamp'].min()}_{df['timestamp'].max()}"
+            else:
+                data_str = f"{len(df)}_{df.shape[1]}"
+            return hashlib.md5(data_str.encode()).hexdigest()[:8]
+        except:
+            return "unknown"
+    
+    def get_metadata(self, timeframe: str) -> Dict:
+        """Get metadata for a specific dataset."""
+        return self.dataset_metadata.get(timeframe, {})
+    
+    def get_all_metadata(self) -> Dict:
+        """Get metadata for all loaded datasets."""
+        return self.dataset_metadata
+    
+    def get_feature_columns(self, timeframe: str) -> List[str]:
+        """Get feature columns for a dataset."""
+        df = self.datasets.get(timeframe)
+        if df is None:
+            return []
+        
+        exclude = ['timestamp', 'date', 'open', 'high', 'low', 'close', 'volume']
+        return [col for col in df.columns if col not in exclude]
+
+
+def get_dataset_info(timeframe: str) -> str:
+    """Get a human-readable description of a dataset."""
+    descriptions = {
+        '15m': '15-minute candles (high frequency, ~96 bars/day)',
+        '1h': '1-hour candles (medium frequency, ~24 bars/day)',
+        '4h': '4-hour candles (low frequency, ~6 bars/day)'
+    }
+    return descriptions.get(timeframe, timeframe)
+
+"""
+Export Manager - Centralizes export of research results.
+"""
+
+import pandas as pd
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+import json
+import shutil
+
+
+class ExportManager:
+    """Manager for exporting research results."""
+    
+    def __init__(self, base_output_dir: Path):
+        """
+        Initialize the export manager.
+        
+        Args:
+            base_output_dir: Base directory for outputs
+        """
+        self.base_output_dir = Path(base_output_dir)
+        self.base_output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create subdirectories
+        self.raw_dir = self.base_output_dir / "raw"
+        self.consolidated_dir = self.base_output_dir / "consolidated"
+        self.reports_dir = self.base_output_dir / "reports"
+        self.cross_module_dir = self.base_output_dir / "cross_module_analysis"
+        
+        for d in [self.raw_dir, self.consolidated_dir, self.reports_dir, self.cross_module_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+    
+    def export_module_outputs(
+        self,
+        module_id: str,
+        dataset: str,
+        result: Any,
+        output_dir: Optional[Path] = None
+    ) -> Dict[str, Path]:
+        """
+        Export outputs from a module run.
+        
+        Args:
+            module_id: Module identifier
+            dataset: Dataset timeframe
+            result: Result object from module
+            output_dir: Specific output directory (optional)
+        
+        Returns:
+            dict: {artifact_name: filepath}
+        """
+        outputs = {}
+        
+        # Determine target directory
+        if output_dir is None:
+            target_dir = self.raw_dir / f"module{module_id}" / dataset
+        else:
+            target_dir = Path(output_dir)
+        
+        target_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Extract artifacts from result
+        artifacts = {}
+        if hasattr(result, 'artifacts'):
+            artifacts = result.artifacts
+        elif hasattr(result, 'Artifacts'):
+            artifacts = result.Artifacts
+        
+        # Export each artifact
+        for name, data in artifacts.items():
+            if data is None:
+                continue
+            
+            filepath = target_dir / f"{name}.csv"
+            
+            try:
+                if isinstance(data, pd.DataFrame):
+                    data.to_csv(filepath, index=False)
+                    outputs[name] = filepath
+                elif isinstance(data, (dict, list)):
+                    with open(filepath.with_suffix('.json'), 'w', encoding='utf-8') as f:
+                        json.dump(data, f, indent=2, default=str)
+                    outputs[name] = filepath.with_suffix('.json')
+                elif isinstance(data, str):
+                    with open(filepath.with_suffix('.txt'), 'w', encoding='utf-8') as f:
+                        f.write(data)
+                    outputs[name] = filepath.with_suffix('.txt')
+                else:
+                    # Try to convert to string
+                    with open(filepath.with_suffix('.txt'), 'w', encoding='utf-8') as f:
+                        f.write(str(data))
+                    outputs[name] = filepath.with_suffix('.txt')
+            except Exception as e:
+                print(f"    ⚠ Could not export {name}: {e}")
+        
+        return outputs
+    
+    def consolidate_statistics(self, module_id: str, dataset: str, result: Any) -> pd.DataFrame:
+        """
+        Extract statistics from a module result into a DataFrame.
+        
+        Args:
+            module_id: Module identifier
+            dataset: Dataset timeframe
+            result: Result object from module
+        
+        Returns:
+            DataFrame: Consolidated statistics
+        """
+        stats = []
+        
+        # Try to get statistics from result
+        if hasattr(result, 'statistics') and result.statistics:
+            stats_dict = result.statistics
+            if isinstance(stats_dict, dict):
+                for key, value in stats_dict.items():
+                    if isinstance(value, (int, float, bool)):
+                        stats.append({
+                            'module_id': module_id,
+                            'dataset': dataset,
+                            'statistic': key,
+                            'value': value
+                        })
+        
+        # Also try from result object attributes
+        if hasattr(result, '__dict__'):
+            for key, value in result.__dict__.items():
+                if isinstance(value, (int, float, bool)) and not key.startswith('_'):
+                    # Check if not already added
+                    if not any(s['statistic'] == key for s in stats):
+                        stats.append({
+                            'module_id': module_id,
+                            'dataset': dataset,
+                            'statistic': key,
+                            'value': value
+                        })
+        
+        # Also check for summary_statistics
+        if hasattr(result, 'summary_statistics') and result.summary_statistics:
+            for key, value in result.summary_statistics.items():
+                if isinstance(value, (int, float, bool)):
+                    if not any(s['statistic'] == f"summary_{key}" for s in stats):
+                        stats.append({
+                            'module_id': module_id,
+                            'dataset': dataset,
+                            'statistic': f"summary_{key}",
+                            'value': value
+                        })
+        
+        return pd.DataFrame(stats)
+    
+    def save_master_database(self, all_stats: pd.DataFrame) -> Path:
+        """
+        Save the master database of all statistics.
+        
+        Args:
+            all_stats: Consolidated statistics DataFrame
+        
+        Returns:
+            Path: Path to saved file
+        """
+        filepath = self.base_output_dir / "master_database.csv"
+        all_stats.to_csv(filepath, index=False)
+        return filepath
+    
+    def save_research_index(self, index_data: pd.DataFrame) -> Path:
+        """
+        Save the research index.
+        
+        Args:
+            index_data: Research index DataFrame
+        
+        Returns:
+            Path: Path to saved file
+        """
+        filepath = self.base_output_dir / "research_index.csv"
+        index_data.to_csv(filepath, index=False)
+        return filepath
+    
+    def export_report(self, module_id: str, report: str) -> Path:
+        """
+        Export a module report as markdown.
+        
+        Args:
+            module_id: Module identifier
+            report: Report content
+        
+        Returns:
+            Path: Path to saved file
+        """
+        filepath = self.reports_dir / f"{module_id}.md"
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(report)
+        return filepath
+
+"""
+Generate Research Summary - Creates comprehensive research reports.
+"""
+
+import pandas as pd
+from pathlib import Path
+from datetime import datetime
+from typing import Optional
+
+
+def generate_summary(
+    research_dir: Path,
+    output_file: Optional[Path] = None
+) -> str:
+    """
+    Generate a research summary report.
+    
+    Args:
+        research_dir: Path to research_results directory
+        output_file: Path to output file (optional)
+    
+    Returns:
+        str: Summary report
+    """
+    research_dir = Path(research_dir)
+    
+    if output_file is None:
+        output_file = research_dir / "research_summary.md"
+    
+    # Load master database
+    master_path = research_dir / "master_database.csv"
+    if not master_path.exists():
+        return "No master database found. Run research_runner.py first."
+    
+    master = pd.read_csv(master_path)
+    
+    # Load research index
+    index_path = research_dir / "research_index.csv"
+    index = pd.read_csv(index_path) if index_path.exists() else None
+    
+    lines = []
+    
+    lines.append("# Project Atlas - Research Summary")
+    lines.append("")
+    lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    lines.append("")
+    
+    # Overview
+    lines.append("## Overview")
+    lines.append("")
+    lines.append(f"- **Total Records**: {len(master):,}")
+    lines.append(f"- **Unique Modules**: {master['module_id'].nunique()}")
+    lines.append(f"- **Datasets**: {', '.join(sorted(master['dataset'].unique()))}")
+    lines.append(f"- **Statistics**: {len(master['statistic'].unique())}")
+    lines.append("")
+    
+    if index is not None:
+        passed = len(index[index['status'] == 'PASS'])
+        failed = len(index[index['status'] == 'FAIL'])
+        lines.append(f"- **Passed**: {passed}")
+        lines.append(f"- **Failed**: {failed}")
+        lines.append(f"- **Success Rate**: {(passed/(passed+failed)*100):.1f}%")
+        lines.append("")
+    
+    # Top Modules
+    lines.append("## Top Modules by Statistics Count")
+    lines.append("")
+    module_stats = master.groupby('module_id').size().sort_values(ascending=False)
+    lines.append("| Module | Statistics |")
+    lines.append("|--------|------------|")
+    for module, count in module_stats.head(10).items():
+        lines.append(f"| {module} | {count:,} |")
+    lines.append("")
+    
+    # Top Statistics
+    lines.append("## Most Common Statistics")
+    lines.append("")
+    stat_counts = master['statistic'].value_counts().head(10)
+    lines.append("| Statistic | Count |")
+    lines.append("|-----------|-------|")
+    for stat, count in stat_counts.items():
+        lines.append(f"| {stat} | {count:,} |")
+    lines.append("")
+    
+    # Dataset Coverage
+    lines.append("## Dataset Coverage")
+    lines.append("")
+    dataset_stats = master.groupby('dataset').size()
+    lines.append("| Dataset | Records |")
+    lines.append("|---------|---------|")
+    for dataset, count in dataset_stats.items():
+        lines.append(f"| {dataset} | {count:,} |")
+    lines.append("")
+    
+    # Statistics Summary
+    lines.append("## Statistics Summary")
+    lines.append("")
+    numeric_cols = master.select_dtypes(include=['float64', 'int64']).columns
+    numeric_cols = [c for c in numeric_cols if c not in ['module_id']]
+    
+    if numeric_cols:
+        lines.append("| Statistic | Mean | Std | Min | Max |")
+        lines.append("|-----------|------|-----|-----|-----|")
+        for col in numeric_cols[:10]:
+            lines.append(
+                f"| {col} | "
+                f"{master[col].mean():.4f} | "
+                f"{master[col].std():.4f} | "
+                f"{master[col].min():.4f} | "
+                f"{master[col].max():.4f} |"
+            )
+        lines.append("")
+    
+    # Failed Modules (if any)
+    if index is not None:
+        failed_modules = index[index['status'] == 'FAIL']
+        if not failed_modules.empty:
+            lines.append("## Failed Modules")
+            lines.append("")
+            lines.append("| Module | Dataset | Error |")
+            lines.append("|--------|---------|-------|")
+            for _, row in failed_modules.iterrows():
+                error = row.get('error', 'Unknown')[:100]
+                lines.append(f"| {row['module_id']} | {row['dataset']} | {error} |")
+            lines.append("")
+    
+    # Interpretation
+    lines.append("## Interpretation")
+    lines.append("")
+    
+    if len(master) > 1000:
+        lines.append("✅ **Robust Data**: A large number of statistics have been collected.")
+    else:
+        lines.append("⚠️ **Limited Data**: Consider running more modules or datasets.")
+    
+    if index is not None:
+        success_rate = passed / (passed + failed) if (passed + failed) > 0 else 0
+        if success_rate > 0.9:
+            lines.append("✅ **High Success Rate**: Most modules completed successfully.")
+        elif success_rate > 0.7:
+            lines.append("✓ **Moderate Success Rate**: Some modules failed.")
+        else:
+            lines.append("⚠️ **Low Success Rate**: Many modules failed. Check logs.")
+    
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+    lines.append("*Generated by Project Atlas Research Framework*")
+    
+    summary = "\n".join(lines)
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(summary)
+    
+    print(f"Summary saved to: {output_file}")
+    return summary
+
+
+def main():
+    """Main entry point."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Generate Research Summary")
+    parser.add_argument(
+        "--research-dir",
+        type=str,
+        default="research_results",
+        help="Path to research_results directory"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="Output file path"
+    )
+    
+    args = parser.parse_args()
+    
+    generate_summary(
+        Path(args.research_dir),
+        Path(args.output) if args.output else None
+    )
+
+
+if __name__ == "__main__":
+    main()"""
+Module Loader - Dynamically loads and runs frozen modules.
+"""
+
+import importlib
+import sys
+import traceback
+import re
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+import inspect
+import pandas as pd
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from atlas.core.base_research_module import BaseResearchModule
+from atlas.framework.registry import AtlasRegistry
+
+
+class ModuleLoader:
+    """Loader for frozen Atlas modules using metadata-based discovery."""
+    
+    def __init__(self, modules_path: Path = None):
+        if modules_path is None:
+            modules_path = Path(__file__).parent.parent / "modules"
+        self.modules_path = Path(modules_path)
+        self.registry = AtlasRegistry()
+        
+        print(f"[DEBUG] Modules path: {self.modules_path}")
+        print(f"[DEBUG] Exists: {self.modules_path.exists()}")
+        
+    def discover_modules(self) -> List[Dict[str, Any]]:
+        """Discover all available modules."""
+        modules = []
+        
+        if not self.modules_path.exists():
+            print(f"⚠ Module root not found: {self.modules_path}")
+            return []
+        
+        print(f"\n[DEBUG] Scanning: {self.modules_path}")
+        
+        for folder in sorted(self.modules_path.iterdir()):
+            if folder.is_dir() and folder.name.startswith('module'):
+                match = re.match(r"module(\d+)", folder.name)
+                if not match:
+                    continue
+                
+                module_id = match.group(1)
+                module_file = folder / "module.py"
+                
+                if not module_file.exists():
+                    continue
+                
+                try:
+                    module_path = f"atlas.modules.{folder.name}.module"
+                    module = importlib.import_module(module_path)
+                    
+                    # Find candidates (BaseResearchModule subclasses)
+                    candidates = []
+                    
+                    for name, obj in inspect.getmembers(module, inspect.isclass):
+                        try:
+                            if issubclass(obj, BaseResearchModule) and obj is not BaseResearchModule:
+                                candidates.append(obj)
+                        except TypeError:
+                            pass
+                    
+                    if not candidates:
+                        continue
+                    
+                    # Priority selection: Research > Validation > Engine
+                    research = [c for c in candidates if c.__name__.endswith("Research")]
+                    validation = [c for c in candidates if c.__name__.endswith("Validation")]
+                    engine = [c for c in candidates if c.__name__.endswith("Engine")]
+                    
+                    main_class = candidates[0]
+                    if research:
+                        main_class = research[0]
+                    elif validation:
+                        main_class = validation[0]
+                    elif engine:
+                        main_class = engine[0]
+                    
+                    # Get metadata
+                    metadata = {}
+                    if hasattr(main_class, 'METADATA'):
+                        metadata = main_class.METADATA
+                    
+                    # Auto-register
+                    if not self.registry.is_registered_class(main_class):
+                        reg_metadata = {
+                            "module": module_id,
+                            "name": metadata.get('name', main_class.__name__),
+                            "version": metadata.get('version', 'unknown'),
+                            "category": metadata.get('category', 'Unknown'),
+                        }
+                        self.registry.register_module_class(
+                            module_class=main_class,
+                            module_id=module_id,
+                            metadata=reg_metadata,
+                        )
+                    
+                    # Normalize metadata - extract depends_on to top level
+                    module_info = {
+                        'module_id': module_id,
+                        'folder': folder.name,
+                        'main_class': main_class,
+                        'metadata': metadata,
+                        'module_name': metadata.get('name', main_class.__name__),
+                        'module_version': metadata.get('version', 'unknown'),
+                        'depends_on': metadata.get('depends_on', []),  # Normalized
+                        'has_run_dataframe': hasattr(main_class, 'run_dataframe'),
+                        'has_run': hasattr(main_class, 'run'),
+                    }
+                    
+                    modules.append(module_info)
+                    
+                except Exception:
+                    traceback.print_exc()
+                    continue
+        
+        print(f"\n[DEBUG] Total modules discovered: {len(modules)}")
+        return modules
+    
+    def instantiate_module(self, module_info: Dict[str, Any], **kwargs) -> Any:
+        """Instantiate a module."""
+        cls = module_info['main_class']
+        sig = inspect.signature(cls.__init__)
+        params = sig.parameters
+        
+        filtered_kwargs = {}
+        for key, value in kwargs.items():
+            if key in params or key == 'self':
+                filtered_kwargs[key] = value
+        
+        try:
+            return cls(**filtered_kwargs)
+        except Exception:
+            return cls()
+    
+    def run_module(self, module: Any, df: pd.DataFrame, dataset_id: str = "research",
+                   output_dir: Optional[Path] = None) -> Any:
+        """Run an already-instantiated module."""
+        if hasattr(module, 'run_dataframe'):
+            return module.run_dataframe(df, dataset_id=dataset_id, output_dir=output_dir)
+        if hasattr(module, 'run'):
+            return module.run(df, output_dir=output_dir)
+        raise ValueError(f"Module has no run_dataframe or run method")
+
+"""
+Research Logger - Logs research campaign execution.
+"""
+
+import logging
+import sys
+from pathlib import Path
+from datetime import datetime
+import json
+
+
+class ResearchLogger:
+    """Logger for research campaign execution."""
+    
+    def __init__(self, log_dir: Path):
+        """
+        Initialize the research logger.
+        
+        Args:
+            log_dir: Directory for log files
+        """
+        self.log_dir = Path(log_dir)
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Set up logging
+        log_file = self.log_dir / "research_campaign.log"
+        
+        self.logger = logging.getLogger('ResearchRunner')
+        self.logger.setLevel(logging.INFO)
+        
+        # Remove existing handlers
+        self.logger.handlers = []
+        
+        # File handler with UTF-8 encoding
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        
+        # Console handler
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        
+        # Formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+    
+    def info(self, msg: str):
+        """Log info message."""
+        self.logger.info(msg)
+    
+    def warning(self, msg: str):
+        """Log warning message."""
+        self.logger.warning(msg)
+    
+    def error(self, msg: str):
+        """Log error message."""
+        self.logger.error(msg)
+    
+    def start_campaign(self, campaign_name: str, modules: list, datasets: list):
+        """Log campaign start."""
+        self.info("=" * 60)
+        self.info(f"RESEARCH CAMPAIGN: {campaign_name}")
+        self.info("=" * 60)
+        self.info(f"Modules: {len(modules)}")
+        self.info(f"Datasets: {datasets}")
+        self.info(f"Timestamp: {datetime.now().isoformat()}")
+    
+    def start_module(self, module_id: str, dataset: str):
+        """Log module start."""
+        self.info(f"\n  Running module {module_id} on {dataset}...")
+    
+    def module_result(self, module_id: str, dataset: str, success: bool, duration: float, stats_count: int):
+        """Log module result."""
+        status = "✓ PASSED" if success else "✗ FAILED"
+        self.info(f"    {status} in {duration:.2f}s ({stats_count} stats)")
+    
+    def finish_campaign(self, total_modules: int, total_success: int, total_time: float):
+        """Log campaign finish."""
+        self.info("\n" + "=" * 60)
+        self.info("RESEARCH CAMPAIGN COMPLETE")
+        self.info("=" * 60)
+        self.info(f"Modules: {total_modules}")
+        self.info(f"Successful: {total_success}")
+        self.info(f"Failed: {total_modules - total_success}")
+        self.info(f"Total Time: {total_time:.1f}s")
+        self.info(f"Timestamp: {datetime.now().isoformat()}")
+    
+    def save_metadata(self, metadata: dict) -> Path:
+        """Save campaign metadata to JSON."""
+        filepath = self.log_dir / "campaign_metadata.json"
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=2, default=str)
+        return filepath
+
+"""
+Research Runner - Main entry point for research campaigns.
+Dataset-aware execution with dependency injection.
+"""
+
+import sys
+import time
+from pathlib import Path
+from datetime import datetime
+import pandas as pd
+import traceback
+import json
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_DATA_PATH = PROJECT_ROOT / "data" / "raw"
+
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from atlas.research.dataset_registry import DatasetRegistry
+from atlas.research.module_loader import ModuleLoader
+from atlas.research.export_manager import ExportManager
+from atlas.research.research_logger import ResearchLogger
+from atlas.research.summary_builder import SummaryBuilder
+from atlas.framework.artifact_store import ArtifactStore
+from atlas.framework.dependency_injector import DependencyInjector
+from atlas.framework.topological_sort import topological_sort, get_execution_order
+
+
+class ResearchRunner:
+    """Main runner for research campaigns with dataset-aware dependency injection."""
+    
+    def __init__(
+        self,
+        data_path: Path = None,
+        output_dir: Path = None,
+        log_dir: Path = None,
+        modules_filter: list = None
+    ):
+        """
+        Initialize the research runner.
+        
+        Args:
+            data_path: Path to raw data directory
+            output_dir: Path to output directory
+            log_dir: Path to log directory
+            modules_filter: List of module IDs to run (None = all)
+        """
+        if data_path is None:
+            data_path = DEFAULT_DATA_PATH
+        if output_dir is None:
+            output_dir = PROJECT_ROOT / "research_results"
+        if log_dir is None:
+            log_dir = output_dir / "logs"
+        
+        self.data_path = Path(data_path)
+        self.output_dir = Path(output_dir)
+        self.log_dir = Path(log_dir)
+        self.modules_filter = modules_filter
+        
+        # Initialize components
+        self.dataset_registry = DatasetRegistry(self.data_path)
+        self.module_loader = ModuleLoader()
+        self.export_manager = ExportManager(self.output_dir)
+        self.logger = ResearchLogger(self.log_dir)
+        self.summary_builder = SummaryBuilder(self.output_dir)
+        
+        # Artifact store and dependency injector
+        self.artifact_store = ArtifactStore()
+        self.dependency_injector = DependencyInjector(self.artifact_store)
+        
+        self.results = []
+        self.completed_modules = set()  # (dataset, module_id) tuples
+        self.start_time = None
+        self.end_time = None
+    
+    def run(self) -> bool:
+        """
+        Run the full research campaign.
+        
+        Returns:
+            bool: True if successful
+        """
+        self.start_time = time.time()
+        
+        # Load datasets
+        self.logger.info("Loading datasets...")
+        datasets = self.dataset_registry.load_all()
+        
+        if not datasets:
+            self.logger.error("No datasets loaded!")
+            return False
+        
+        self.logger.info(f"Loaded {len(datasets)} datasets: {list(datasets.keys())}")
+        
+        # Discover modules
+        self.logger.info("Discovering modules...")
+        modules = self.module_loader.discover_modules()
+        
+        # Build execution order with proper dependency resolution
+        if self.modules_filter:
+            self.logger.info(f"Filtering to modules: {self.modules_filter}")
+            execution_order = []
+            
+            for module_id in self.modules_filter:
+                module_order = get_execution_order(modules, root_module=module_id)
+                execution_order.extend(module_order)
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            execution_order = [
+                m for m in execution_order
+                if not (m["module_id"] in seen or seen.add(m["module_id"]))
+            ]
+        else:
+            execution_order = get_execution_order(modules)
+        
+        self.logger.info(f"Found {len(modules)} modules")
+        self.logger.info(f"Execution order: {[m['module_id'] for m in execution_order]}")
+        
+        if not execution_order:
+            self.logger.error("No modules to execute!")
+            return False
+        
+        # Start campaign
+        self.logger.start_campaign(
+            "Research Campaign v1",
+            execution_order,
+            list(datasets.keys())
+        )
+        
+        # Run each dataset first (recommended: execute by dataset)
+        all_stats = []
+        index_data = []
+        
+        for dataset_name, market_df in datasets.items():
+            self.logger.info(f"\n{'='*60}")
+            self.logger.info(f"PROCESSING DATASET: {dataset_name}")
+            self.logger.info(f"{'='*60}")
+            
+            for module_info in execution_order:
+                module_id = module_info['module_id']
+                module_name = module_info.get('module_name', module_id)
+                dependencies = module_info.get('depends_on', [])
+                
+                self.logger.start_module(module_id, dataset_name)
+                
+                try:
+                    start_time = time.time()
+                    
+                    # Validate dependencies
+                    try:
+                        self.dependency_injector.validate_dependencies(
+                            dataset_name, module_id, dependencies, self.completed_modules
+                        )
+                    except RuntimeError as e:
+                        self.logger.error(f"    Dependency validation failed: {e}")
+                        self.results.append({
+                            'module_id': module_id,
+                            'dataset': dataset_name,
+                            'success': False,
+                            'duration': 0,
+                            'error': str(e)
+                        })
+                        continue
+                    
+                    # Create output directory
+                    module_output_dir = (
+                        self.export_manager.raw_dir / 
+                        f"module{module_id}" / 
+                        dataset_name
+                    )
+                    module_output_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    # Instantiate module
+                    module = self.module_loader.instantiate_module(module_info)
+                    
+                    # Inject dependency features if they exist
+                    if dependencies:
+                        self.dependency_injector.log_dependency_summary(
+                            dataset_name, module_id, dependencies
+                        )
+                        
+                        feature_df = self.dependency_injector.build_feature_dataframe(
+                            dataset_name, dependencies
+                        )
+                        if feature_df is not None:
+                            module.set_dependency_features(feature_df)
+                            self.logger.info(f"    Injected {len(feature_df.columns)} features from {len(dependencies)} modules")
+                        else:
+                            self.logger.warning(f"    No features found for dependencies: {dependencies}")
+                    
+                    # Always pass market data separately (never overwritten)
+                    result = self.module_loader.run_module(
+                        module,
+                        market_df,
+                        dataset_id=f"{module_id}_{dataset_name}",
+                        output_dir=module_output_dir
+                    )
+                    
+                    duration = time.time() - start_time
+                    
+                    # Store artifacts (standardized format) with dataset awareness
+                    if hasattr(result, 'artifacts') and result.artifacts:
+                        self.artifact_store.put(dataset_name, module_id, result.artifacts)
+                        self.logger.info(f"    Stored {len(result.artifacts)} artifacts for {dataset_name}")
+                    
+                    # Export outputs
+                    self.export_manager.export_module_outputs(
+                        module_id,
+                        dataset_name,
+                        result,
+                        module_output_dir
+                    )
+                    
+                    # Extract statistics
+                    stats_df = self.export_manager.consolidate_statistics(
+                        module_id,
+                        dataset_name,
+                        result
+                    )
+                    
+                    # Add metadata
+                    stats_df['timestamp'] = datetime.now().isoformat()
+                    stats_df['duration'] = duration
+                    stats_df['version'] = module_info.get('module_version', 'unknown')
+                    stats_df['has_features'] = self.artifact_store.has(dataset_name, module_id, "features")
+                    stats_df['dataset'] = dataset_name
+                    
+                    all_stats.append(stats_df)
+                    
+                    # Build index entry
+                    index_data.append({
+                        'module_id': module_id,
+                        'module_name': module_name,
+                        'dataset': dataset_name,
+                        'status': 'PASS' if getattr(result, 'status', 'unknown') == 'completed' else 'FAIL',
+                        'csv_path': str(module_output_dir),
+                        'execution_time': duration,
+                        'rows': len(stats_df),
+                        'version': module_info.get('module_version', 'unknown'),
+                        'timestamp': datetime.now().isoformat(),
+                        'dependencies': ','.join(dependencies),
+                        'has_features': self.artifact_store.has(dataset_name, module_id, "features")
+                    })
+                    
+                    self.logger.module_result(
+                        module_id,
+                        dataset_name,
+                        True,
+                        duration,
+                        len(stats_df)
+                    )
+                    
+                    # Build and export report
+                    report = self.summary_builder.build_module_report(
+                        module_id,
+                        module_info,
+                        result,
+                        dataset_name,
+                        duration
+                    )
+                    self.export_manager.export_report(
+                        f"{module_id}_{dataset_name}",
+                        report
+                    )
+                    
+                    self.results.append({
+                        'module_id': module_id,
+                        'dataset': dataset_name,
+                        'success': True,
+                        'duration': duration,
+                        'stats_count': len(stats_df)
+                    })
+                    
+                    # Mark as completed with dataset awareness
+                    self.completed_modules.add((dataset_name, module_id))
+                    
+                except Exception as e:
+                    duration = time.time() - start_time
+                    self.logger.error(f"    ✗ FAILED: {str(e)}")
+                    self.logger.error(traceback.format_exc())
+                    
+                    self.results.append({
+                        'module_id': module_id,
+                        'dataset': dataset_name,
+                        'success': False,
+                        'duration': duration,
+                        'error': str(e)
+                    })
+                    
+                    index_data.append({
+                        'module_id': module_id,
+                        'module_name': module_name,
+                        'dataset': dataset_name,
+                        'status': 'FAIL',
+                        'csv_path': '',
+                        'execution_time': duration,
+                        'rows': 0,
+                        'version': module_info.get('module_version', 'unknown'),
+                        'timestamp': datetime.now().isoformat(),
+                        'dependencies': ','.join(dependencies),
+                        'error': str(e)
+                    })
+        
+        self.end_time = time.time()
+        total_time = self.end_time - self.start_time
+        
+        # Consolidate all statistics
+        if all_stats:
+            master_df = pd.concat(all_stats, ignore_index=True)
+            self.export_manager.save_master_database(master_df)
+            self.logger.info(f"Saved master database: {len(master_df)} rows")
+        
+        # Save research index
+        index_df = pd.DataFrame(index_data)
+        self.export_manager.save_research_index(index_df)
+        self.logger.info(f"Saved research index: {len(index_df)} entries")
+        
+        # Save injection log
+        injection_log = self.dependency_injector.get_injection_log()
+        injection_path = self.output_dir / "injection_log.json"
+        with open(injection_path, 'w', encoding='utf-8') as f:
+            json.dump(injection_log, f, indent=2, default=str)
+        self.logger.info(f"Saved injection log: {injection_path}")
+        
+        # Generate campaign summary
+        summary = self.summary_builder.build_campaign_summary(
+            self.results,
+            total_time
+        )
+        summary_path = self.output_dir / "campaign_summary.txt"
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(summary)
+        self.logger.info(f"Saved campaign summary: {summary_path}")
+        
+        # Save artifact store summary
+        artifact_summary = self.artifact_store.summary()
+        artifact_path = self.output_dir / "artifact_summary.json"
+        with open(artifact_path, 'w', encoding='utf-8') as f:
+            json.dump(artifact_summary, f, indent=2)
+        self.logger.info(f"Saved artifact summary: {artifact_path}")
+        
+        # Finish campaign
+        total_success = sum(1 for r in self.results if r.get('success', False))
+        self.logger.finish_campaign(len(self.results), total_success, total_time)
+        
+        return total_success == len(self.results)
+
+
+def main():
+    """Main entry point."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Research Runner for Project Atlas")
+    parser.add_argument(
+        "--data-path",
+        type=str,
+        default=str(DEFAULT_DATA_PATH),
+        help="Path to raw data directory"
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=str,
+        default=str(PROJECT_ROOT / "research_results"),
+        help="Output directory for results"
+    )
+    parser.add_argument(
+        "--modules",
+        type=str,
+        nargs='+',
+        help="Specific module IDs to run (e.g., 001 010 111)"
+    )
+    parser.add_argument(
+        "--timeframes",
+        type=str,
+        nargs='+',
+        default=['15m', '1h', '4h'],
+        help="Timeframes to analyze"
+    )
+    
+    args = parser.parse_args()
+    
+    print("=" * 60)
+    print("PROJECT ATLAS - RESEARCH RUNNER")
+    print("=" * 60)
+    print(f"\nProject Root: {PROJECT_ROOT}")
+    print(f"Data Path: {args.data_path}")
+    print(f"Output Dir: {args.output_dir}")
+    print(f"Timeframes: {args.timeframes}")
+    print(f"Modules: {args.modules if args.modules else 'ALL'}")
+    print("\n" + "-" * 60)
+    
+    runner = ResearchRunner(
+        data_path=Path(args.data_path),
+        output_dir=Path(args.output_dir),
+        modules_filter=args.modules
+    )
+    
+    success = runner.run()
+    
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()
+
+"""
+Summary Builder - Builds research summaries and reports.
+"""
+
+import pandas as pd
+from pathlib import Path
+from typing import Dict, Any, List
+from datetime import datetime
+
+
+class SummaryBuilder:
+    """Builder for research summaries and reports."""
+    
+    def __init__(self, output_dir: Path):
+        """
+        Initialize the summary builder.
+        
+        Args:
+            output_dir: Directory for output files
+        """
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def build_module_report(
+        self,
+        module_id: str,
+        module_info: Dict[str, Any],
+        result: Any,
+        dataset: str,
+        execution_time: float
+    ) -> str:
+        """
+        Build a markdown report for a module.
+        
+        Args:
+            module_id: Module identifier
+            module_info: Module metadata
+            result: Module result
+            dataset: Dataset timeframe
+            execution_time: Execution time in seconds
+        
+        Returns:
+            str: Markdown report
+        """
+        lines = []
+        
+        lines.append("=" * 60)
+        lines.append(f"MODULE {module_id}")
+        lines.append("=" * 60)
+        lines.append("")
+        
+        # Module info
+        name = module_info.get('metadata', {}).get('name', module_id)
+        lines.append(f"## Module: {name}")
+        lines.append(f"Dataset: {dataset}")
+        lines.append(f"Executed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Duration: {execution_time:.2f}s")
+        lines.append("")
+        
+        # Status
+        status = "PASSED" if getattr(result, 'status', 'unknown') == 'completed' else "FAILED"
+        lines.append(f"## Status: {status}")
+        lines.append("")
+        
+        # Statistics
+        lines.append("## Key Statistics")
+        lines.append("")
+        lines.append("| Statistic | Value |")
+        lines.append("|-----------|-------|")
+        
+        # Extract statistics from result
+        stats_found = False
+        
+        if hasattr(result, 'statistics') and result.statistics:
+            for key, value in result.statistics.items():
+                if isinstance(value, (int, float)):
+                    lines.append(f"| {key} | {value:.4f} |")
+                    stats_found = True
+                elif isinstance(value, str):
+                    lines.append(f"| {key} | {value} |")
+                    stats_found = True
+        
+        if hasattr(result, 'summary_statistics') and result.summary_statistics:
+            for key, value in result.summary_statistics.items():
+                if isinstance(value, (int, float)):
+                    lines.append(f"| summary_{key} | {value:.4f} |")
+                    stats_found = True
+        
+        if not stats_found:
+            lines.append("| No statistics found | |")
+        
+        lines.append("")
+        
+        # Interpretation
+        lines.append("## Interpretation")
+        lines.append("")
+        
+        if 'passed' in getattr(result, 'statistics', {}):
+            passed = result.statistics.get('passed', False)
+            if passed:
+                lines.append("✓ The module passed validation criteria.")
+            else:
+                lines.append("⚠ The module did not pass validation criteria.")
+        else:
+            lines.append("Validation status not available.")
+        
+        lines.append("")
+        
+        # Related modules (placeholder for future)
+        lines.append("## Related Modules")
+        lines.append("")
+        lines.append("(To be determined from cross-module analysis)")
+        lines.append("")
+        
+        # Future Research
+        lines.append("## Future Research")
+        lines.append("")
+        lines.append("(To be determined from cross-module analysis)")
+        lines.append("")
+        
+        return "\n".join(lines)
+    
+    def build_campaign_summary(
+        self,
+        results: List[Dict[str, Any]],
+        total_time: float
+    ) -> str:
+        """
+        Build a campaign summary report.
+        
+        Args:
+            results: List of module results
+            total_time: Total campaign time
+        
+        Returns:
+            str: Campaign summary
+        """
+        lines = []
+        
+        lines.append("=" * 60)
+        lines.append("RESEARCH CAMPAIGN SUMMARY")
+        lines.append("=" * 60)
+        lines.append("")
+        lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append("")
+        
+        total_modules = len(results)
+        passed = sum(1 for r in results if r.get('success', False))
+        failed = total_modules - passed
+        
+        lines.append(f"## Overview")
+        lines.append(f"Modules Executed: {total_modules}")
+        lines.append(f"Passed: {passed}")
+        lines.append(f"Failed: {failed}")
+        lines.append(f"Success Rate: {(passed/total_modules*100):.1f}%" if total_modules > 0 else "N/A")
+        lines.append(f"Total Time: {total_time:.1f}s ({total_time/60:.1f}m)")
+        lines.append("")
+        
+        # Module breakdown
+        lines.append("## Module Results")
+        lines.append("")
+        lines.append("| Module | Dataset | Status | Time (s) | Statistics |")
+        lines.append("|--------|---------|--------|----------|------------|")
+        
+        for r in results:
+            status = "✓ PASS" if r.get('success', False) else "✗ FAIL"
+            module_id = r.get('module_id', '')
+            dataset = r.get('dataset', '')
+            duration = r.get('duration', 0)
+            stats_count = r.get('stats_count', 0)
+            lines.append(f"| {module_id} | {dataset} | {status} | {duration:.2f} | {stats_count} |")
+        
+        lines.append("")
+        
+        # Failed modules
+        failed_modules = [r for r in results if not r.get('success', False)]
+        if failed_modules:
+            lines.append("## Failed Modules")
+            lines.append("")
+            for r in failed_modules:
+                lines.append(f"- {r.get('module_id')} on {r.get('dataset')}: {r.get('error', 'Unknown error')}")
+            lines.append("")
+        
+        lines.append("=" * 60)
+        
+        return "\n".join(lines)
+    
+    def build_cross_module_analysis(
+        self,
+        master_db: pd.DataFrame,
+        analysis_name: str,
+        query: str
+    ) -> str:
+        """
+        Build a cross-module analysis report.
+        
+        Args:
+            master_db: Master database DataFrame
+            analysis_name: Name of the analysis
+            query: Description of the query
+        
+        Returns:
+            str: Analysis report
+        """
+        lines = []
+        
+        lines.append("=" * 60)
+        lines.append(f"CROSS-MODULE ANALYSIS: {analysis_name}")
+        lines.append("=" * 60)
+        lines.append("")
+        lines.append(f"Query: {query}")
+        lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append("")
+        lines.append(f"Total Records: {len(master_db)}")
+        lines.append(f"Modules: {master_db['module_id'].nunique()}")
+        lines.append(f"Datasets: {master_db['dataset'].nunique()}")
+        lines.append("")
+        
+        # Statistics summary
+        lines.append("## Statistics Summary")
+        lines.append("")
+        lines.append("| Statistic | Count | Mean | Std | Min | Max |")
+        lines.append("|-----------|-------|------|-----|-----|-----|")
+        
+        for col in master_db.select_dtypes(include=['float64', 'int64']).columns:
+            if col != 'module_id':
+                lines.append(
+                    f"| {col} | {len(master_db)} | "
+                    f"{master_db[col].mean():.4f} | "
+                    f"{master_db[col].std():.4f} | "
+                    f"{master_db[col].min():.4f} | "
+                    f"{master_db[col].max():.4f} |"
+                )
+        
+        lines.append("")
+        
+        # Module statistics
+        lines.append("## Module Statistics")
+        lines.append("")
+        
+        module_stats = master_db.groupby('module_id').agg({
+            'value': ['mean', 'std', 'count']
+        }).round(4)
+        
+        lines.append(module_stats.to_string())
+        lines.append("")
+        lines.append("=" * 60)
+        
+        return "\n".join(lines)
+    
+    # Try to load existing master database
+    master_path = research_dir / "master_database.csv"
+    if master_path.exists():
+        df = pd.read_csv(master_path)
+        print(f"Loaded existing master database: {len(df)} rows")
+        return df
+    
+    # Otherwise, aggregate from raw outputs
+    raw_dir = research_dir / "raw"
+    if not raw_dir.exists():
+        print(f"Raw directory not found: {raw_dir}")
+        return pd.DataFrame()
+    
+    all_data = []
+    
+    for module_dir in sorted(raw_dir.iterdir()):
+        if not module_dir.is_dir():
+            continue
+        
+        module_id = module_dir.name.replace('module', '')
+        
+        for dataset_dir in module_dir.iterdir():
+            if not dataset_dir.is_dir():
+                continue
+            
+            dataset = dataset_dir.name
+            
+            # Find statistics files
+            for csv_file in dataset_dir.glob("*.csv"):
+                try:
+                    df = pd.read_csv(csv_file)
+                    df['module_id'] = module_id
+                    df['dataset'] = dataset
+                    df['source_file'] = csv_file.name
+                    all_data.append(df)
+                except Exception as e:
+                    print(f"  ⚠ Could not read {csv_file}: {e}")
+    
+    if not all_data:
+        print("No data found to aggregate")
+        return pd.DataFrame()
+    
+    combined = pd.concat(all_data, ignore_index=True)
+    combined.to_csv(output_file, index=False)
+    
+    print(f"Aggregated {len(combined)} rows from {len(all_data)} files")
+    print(f"Saved to: {output_file}")
+    
+    return combined
+
+
+def main():
+    """Main entry point."""
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Aggregate Research Results")
+    parser.add_argument(
+        "--research-dir",
+        type=str,
+        default="research_results",
+        help="Path to research_results directory"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="Output file path"
+    )
+    
+    args = parser.parse_args()
+    
+    aggregate_results(
+        Path(args.research_dir),
+        Path(args.output) if args.output else None
+    )
+
+
+if __name__ == "__main__":
+    main()

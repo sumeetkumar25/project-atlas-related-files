@@ -1,0 +1,187 @@
+"""
+Target Manager - Manages target generation and injection for modules.
+
+Coordinates target generation for modules that declare required targets.
+"""
+
+from typing import Dict, Any, List, Optional, Set
+import pandas as pd
+from pathlib import Path
+
+from .targets import generate_future_breakout, TARGET_CONFIG
+
+
+class TargetManager:
+    """
+    Manages target generation and injection for research modules.
+    
+    Modules declare required targets via METADATA or class attributes.
+    The TargetManager ensures targets are generated before module execution.
+    """
+    
+    # Known target generators
+    TARGET_GENERATORS = {
+        "future_breakout": generate_future_breakout,
+    }
+    
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """
+        Initialize the target manager.
+        
+        Args:
+            config: Global target configuration
+        """
+        self.config = config or TARGET_CONFIG.copy()
+        self._generated_targets = {}  # Cache of generated targets
+        self._target_log = []  # Log of target generation events
+    
+    def ensure_target(
+        self,
+        df: pd.DataFrame,
+        target_name: str,
+        dataset_id: str,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> pd.DataFrame:
+        """
+        Ensure a target column exists in the DataFrame.
+        
+        If the target already exists, validates it.
+        If not, generates it.
+        
+        Args:
+            df: Input DataFrame
+            target_name: Name of the target to ensure
+            dataset_id: Dataset identifier for caching
+            config: Optional target-specific configuration
+            
+        Returns:
+            DataFrame: DataFrame with target column ensured
+        """
+        # Check if target already exists
+        if target_name in df.columns:
+            # Validate existing target
+            if self._validate_existing_target(df[target_name], target_name):
+                self._log_target_event(dataset_id, target_name, "existing", "valid")
+                return df
+        
+        # Generate target
+        if target_name not in self.TARGET_GENERATORS:
+            raise ValueError(
+                f"No generator registered for target: {target_name}"
+            )
+
+        generator = self.TARGET_GENERATORS[target_name]
+        
+        # Merge configs
+        merged_config = self.config.copy()
+        if config:
+            merged_config.update(config)
+        
+        # Generate target
+        df = df.copy()
+        df[target_name] = generator(df, config=merged_config)
+        
+        self._log_target_event(dataset_id, target_name, "generated", "success")
+        self._generated_targets[f"{dataset_id}_{target_name}"] = df[target_name]
+        
+        return df
+    
+    def ensure_targets(
+        self,
+        df: pd.DataFrame,
+        target_names: List[str],
+        dataset_id: str,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> pd.DataFrame:
+        """
+        Ensure multiple target columns exist in the DataFrame.
+        
+        Args:
+            df: Input DataFrame
+            target_names: List of target names to ensure
+            dataset_id: Dataset identifier for caching
+            config: Optional target-specific configuration
+            
+        Returns:
+            DataFrame: DataFrame with target columns ensured
+        """
+        result_df = df.copy()
+        for target_name in target_names:
+            result_df = self.ensure_target(
+                result_df,
+                target_name,
+                dataset_id,
+                config,
+            )
+        return result_df
+    
+    def _validate_existing_target(self, target: pd.Series, target_name: str) -> bool:
+        """
+        Validate an existing target column.
+        
+        Checks:
+        - No NaN in valid rows (structural)
+        - Binary values (0 or 1)
+        - Reasonable positive ratio (if applicable)
+        """
+        # Check that values are binary where not NaN
+        valid_mask = pd.notna(target)
+        if valid_mask.any():
+            if not target[valid_mask].isin([0, 1]).all():
+                return False
+        
+        return True
+    
+    def _log_target_event(self, dataset_id: str, target_name: str, action: str, status: str):
+        """Log a target generation event."""
+        self._target_log.append({
+            "dataset": dataset_id,
+            "target": target_name,
+            "action": action,
+            "status": status,
+            "timestamp": pd.Timestamp.now().isoformat(),
+        })
+    
+    def get_target_log(self) -> List[Dict[str, Any]]:
+        """Get the target generation log."""
+        return self._target_log.copy()
+    
+    def clear_log(self) -> None:
+        """Clear the target generation log."""
+        self._target_log.clear()
+    
+    def get_target_requirements(self, module_info: Dict[str, Any]) -> List[str]:
+        """
+        Extract target requirements from module metadata.
+        
+        Checks:
+        1. module_info.get('required_targets')
+        2. module_info.get('metadata', {}).get('required_targets')
+        3. module_info.get('metadata', {}).get('depends_on_targets')
+        
+        Returns:
+            List[str]: List of target names required by the module
+        """
+        # Check top-level required_targets
+        if "required_targets" in module_info:
+            return module_info["required_targets"]
+        
+        # Check metadata
+        metadata = module_info.get("metadata", {})
+        if "required_targets" in metadata:
+            return metadata["required_targets"]
+        
+        if "depends_on_targets" in metadata:
+            return metadata["depends_on_targets"]
+        
+        return []
+    
+    def summary(self) -> Dict[str, Any]:
+        """Get a summary of target generation activity."""
+        return {
+            "total_events": len(self._target_log),
+            "generated_count": sum(1 for e in self._target_log if e["action"] == "generated"),
+            "existing_count": sum(1 for e in self._target_log if e["action"] == "existing"),
+            "success_count": sum(1 for e in self._target_log if e["status"] == "success"),
+            "targets": list(set(e["target"] for e in self._target_log)),
+        }

@@ -1,0 +1,12 @@
+"""
+Target Generation Module
+
+Generates research targets for supervised learning modules.
+"""
+
+from .future_breakout import generate_future_breakout, TARGET_CONFIG
+
+__all__ = [
+    "generate_future_breakout",
+    "TARGET_CONFIG",
+]

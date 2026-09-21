@@ -1,0 +1,256 @@
+"""
+Summary Builder - Builds research summaries and reports.
+"""
+
+import pandas as pd
+from pathlib import Path
+from typing import Dict, Any, List
+from datetime import datetime
+
+# FIXED: Import from core.result_utils
+from atlas.core.result_utils import result_succeeded
+
+
+class SummaryBuilder:
+    """Builder for research summaries and reports."""
+    
+    def __init__(self, output_dir: Path):
+        """
+        Initialize the summary builder.
+        
+        Args:
+            output_dir: Directory for output files
+        """
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+    
+    def build_module_report(
+        self,
+        module_id: str,
+        module_info: Dict[str, Any],
+        result: Any,
+        dataset: str,
+        execution_time: float
+    ) -> str:
+        """
+        Build a markdown report for a module.
+        
+        Args:
+            module_id: Module identifier
+            module_info: Module metadata
+            result: Module result
+            dataset: Dataset timeframe
+            execution_time: Execution time in seconds
+        
+        Returns:
+            str: Markdown report
+        """
+        lines = []
+        
+        lines.append("=" * 60)
+        lines.append(f"MODULE {module_id}")
+        lines.append("=" * 60)
+        lines.append("")
+        
+        # Module info
+        name = module_info.get('metadata', {}).get('name', module_id)
+        lines.append(f"## Module: {name}")
+        lines.append(f"Dataset: {dataset}")
+        lines.append(f"Executed: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Duration: {execution_time:.2f}s")
+        lines.append("")
+        
+        # Status using canonical result_succeeded()
+        status = "PASSED" if result_succeeded(result) else "FAILED"
+        lines.append(f"## Status: {status}")
+        lines.append("")
+        
+        # Statistics
+        lines.append("## Key Statistics")
+        lines.append("")
+        lines.append("| Statistic | Value |")
+        lines.append("|-----------|-------|")
+        
+        # Extract statistics from result
+        stats_found = False
+        
+        if hasattr(result, 'statistics') and result.statistics:
+            for key, value in result.statistics.items():
+                if isinstance(value, (int, float)):
+                    lines.append(f"| {key} | {value:.4f} |")
+                    stats_found = True
+                elif isinstance(value, str):
+                    lines.append(f"| {key} | {value} |")
+                    stats_found = True
+        
+        if hasattr(result, 'summary_statistics') and result.summary_statistics:
+            for key, value in result.summary_statistics.items():
+                if isinstance(value, (int, float)):
+                    lines.append(f"| summary_{key} | {value:.4f} |")
+                    stats_found = True
+        
+        if not stats_found:
+            lines.append("| No statistics found | |")
+        
+        lines.append("")
+        
+        # Interpretation
+        lines.append("## Interpretation")
+        lines.append("")
+        
+        if 'passed' in getattr(result, 'statistics', {}):
+            passed = result.statistics.get('passed', False)
+            if passed:
+                lines.append("✓ The module passed validation criteria.")
+            else:
+                lines.append("⚠ The module did not pass validation criteria.")
+        else:
+            lines.append("Validation status not available.")
+        
+        lines.append("")
+        
+        # Related modules (placeholder for future)
+        lines.append("## Related Modules")
+        lines.append("")
+        lines.append("(To be determined from cross-module analysis)")
+        lines.append("")
+        
+        # Future Research
+        lines.append("## Future Research")
+        lines.append("")
+        lines.append("(To be determined from cross-module analysis)")
+        lines.append("")
+        
+        return "\n".join(lines)
+    
+    def build_campaign_summary(
+        self,
+        results: List[Dict[str, Any]],
+        total_time: float
+    ) -> str:
+        """
+        Build a campaign summary report.
+        
+        Args:
+            results: List of module results
+            total_time: Total campaign time
+        
+        Returns:
+            str: Campaign summary
+        """
+        lines = []
+        
+        lines.append("=" * 60)
+        lines.append("RESEARCH CAMPAIGN SUMMARY")
+        lines.append("=" * 60)
+        lines.append("")
+        lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append("")
+        
+        total_modules = len(results)
+        passed = sum(1 for r in results if r.get('success', False))
+        failed = total_modules - passed
+        
+        # FIXED: Handle zero division
+        total = passed + failed
+        success_rate = passed / total * 100 if total > 0 else 0.0
+        
+        lines.append(f"## Overview")
+        lines.append(f"Modules Executed: {total_modules}")
+        lines.append(f"Passed: {passed}")
+        lines.append(f"Failed: {failed}")
+        lines.append(f"Success Rate: {success_rate:.1f}%")
+        lines.append(f"Total Time: {total_time:.1f}s ({total_time/60:.1f}m)")
+        lines.append("")
+        
+        # Module breakdown
+        lines.append("## Module Results")
+        lines.append("")
+        lines.append("| Module | Dataset | Status | Time (s) | Statistics |")
+        lines.append("|--------|---------|--------|----------|------------|")
+        
+        for r in results:
+            status = "✓ PASS" if r.get('success', False) else "✗ FAIL"
+            module_id = r.get('module_id', '')
+            dataset = r.get('dataset', '')
+            duration = r.get('duration', 0)
+            stats_count = r.get('stats_count', 0)
+            lines.append(f"| {module_id} | {dataset} | {status} | {duration:.2f} | {stats_count} |")
+        
+        lines.append("")
+        
+        # Failed modules
+        failed_modules = [r for r in results if not r.get('success', False)]
+        if failed_modules:
+            lines.append("## Failed Modules")
+            lines.append("")
+            for r in failed_modules:
+                lines.append(f"- {r.get('module_id')} on {r.get('dataset')}: {r.get('error', 'Unknown error')}")
+            lines.append("")
+        
+        lines.append("=" * 60)
+        
+        return "\n".join(lines)
+    
+    def build_cross_module_analysis(
+        self,
+        master_db: pd.DataFrame,
+        analysis_name: str,
+        query: str
+    ) -> str:
+        """
+        Build a cross-module analysis report.
+        
+        Args:
+            master_db: Master database DataFrame
+            analysis_name: Name of the analysis
+            query: Description of the query
+        
+        Returns:
+            str: Analysis report
+        """
+        lines = []
+        
+        lines.append("=" * 60)
+        lines.append(f"CROSS-MODULE ANALYSIS: {analysis_name}")
+        lines.append("=" * 60)
+        lines.append("")
+        lines.append(f"Query: {query}")
+        lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append("")
+        lines.append(f"Total Records: {len(master_db)}")
+        lines.append(f"Modules: {master_db['module_id'].nunique()}")
+        lines.append(f"Datasets: {master_db['dataset'].nunique()}")
+        lines.append("")
+        
+        # Statistics summary
+        lines.append("## Statistics Summary")
+        lines.append("")
+        lines.append("| Statistic | Count | Mean | Std | Min | Max |")
+        lines.append("|-----------|-------|------|-----|-----|-----|")
+        
+        for col in master_db.select_dtypes(include=['float64', 'int64']).columns:
+            if col != 'module_id':
+                lines.append(
+                    f"| {col} | {len(master_db)} | "
+                    f"{master_db[col].mean():.4f} | "
+                    f"{master_db[col].std():.4f} | "
+                    f"{master_db[col].min():.4f} | "
+                    f"{master_db[col].max():.4f} |"
+                )
+        
+        lines.append("")
+        
+        # Module statistics
+        lines.append("## Module Statistics")
+        lines.append("")
+        
+        module_stats = master_db.groupby('module_id').agg({
+            'value': ['mean', 'std', 'count']
+        }).round(4)
+        
+        lines.append(module_stats.to_string())
+        lines.append("")
+        lines.append("=" * 60)
+        
+        return "\n".join(lines)

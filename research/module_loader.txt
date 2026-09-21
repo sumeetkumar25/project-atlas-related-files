@@ -1,0 +1,150 @@
+"""
+Module Loader - Dynamically loads and runs frozen modules.
+"""
+
+import importlib
+import sys
+import traceback
+import re
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+import inspect
+import pandas as pd
+
+# Add project root to path
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+from atlas.core.base_research_module import BaseResearchModule
+from atlas.framework.registry import AtlasRegistry
+
+
+class ModuleLoader:
+    """Loader for frozen Atlas modules using metadata-based discovery."""
+    
+    def __init__(self, modules_path: Path = None):
+        if modules_path is None:
+            modules_path = Path(__file__).parent.parent / "modules"
+        self.modules_path = Path(modules_path)
+        self.registry = AtlasRegistry()
+        
+        print(f"[DEBUG] Modules path: {self.modules_path}")
+        print(f"[DEBUG] Exists: {self.modules_path.exists()}")
+        
+    def discover_modules(self) -> List[Dict[str, Any]]:
+        """Discover all available modules."""
+        modules = []
+        
+        if not self.modules_path.exists():
+            print(f"⚠ Module root not found: {self.modules_path}")
+            return []
+        
+        print(f"\n[DEBUG] Scanning: {self.modules_path}")
+        
+        for folder in sorted(self.modules_path.iterdir()):
+            if folder.is_dir() and folder.name.startswith('module'):
+                match = re.match(r"module(\d+)", folder.name)
+                if not match:
+                    continue
+                
+                module_id = match.group(1)
+                module_file = folder / "module.py"
+                
+                if not module_file.exists():
+                    continue
+                
+                try:
+                    module_path = f"atlas.modules.{folder.name}.module"
+                    module = importlib.import_module(module_path)
+                    
+                    # Find candidates (BaseResearchModule subclasses)
+                    candidates = []
+                    
+                    for name, obj in inspect.getmembers(module, inspect.isclass):
+                        try:
+                            if issubclass(obj, BaseResearchModule) and obj is not BaseResearchModule:
+                                candidates.append(obj)
+                        except TypeError:
+                            pass
+                    
+                    if not candidates:
+                        continue
+                    
+                    # Priority selection: Research > Validation > Engine
+                    research = [c for c in candidates if c.__name__.endswith("Research")]
+                    validation = [c for c in candidates if c.__name__.endswith("Validation")]
+                    engine = [c for c in candidates if c.__name__.endswith("Engine")]
+                    
+                    main_class = candidates[0]
+                    if research:
+                        main_class = research[0]
+                    elif validation:
+                        main_class = validation[0]
+                    elif engine:
+                        main_class = engine[0]
+                    
+                    # Get metadata
+                    metadata = {}
+                    if hasattr(main_class, 'METADATA'):
+                        metadata = main_class.METADATA
+                    
+                    # Auto-register
+                    if not self.registry.is_registered_class(main_class):
+                        reg_metadata = {
+                            "module": module_id,
+                            "name": metadata.get('name', main_class.__name__),
+                            "version": metadata.get('version', 'unknown'),
+                            "category": metadata.get('category', 'Unknown'),
+                        }
+                        self.registry.register_module_class(
+                            module_class=main_class,
+                            module_id=module_id,
+                            metadata=reg_metadata,
+                        )
+                    
+                    # Normalize metadata - extract depends_on to top level
+                    module_info = {
+                        'module_id': module_id,
+                        'folder': folder.name,
+                        'main_class': main_class,
+                        'metadata': metadata,
+                        'module_name': metadata.get('name', main_class.__name__),
+                        'module_version': metadata.get('version', 'unknown'),
+                        'depends_on': metadata.get('depends_on', []),  # Normalized
+                        'has_run_dataframe': hasattr(main_class, 'run_dataframe'),
+                        'has_run': hasattr(main_class, 'run'),
+                    }
+                    
+                    modules.append(module_info)
+                    
+                except Exception:
+                    traceback.print_exc()
+                    continue
+        
+        print(f"\n[DEBUG] Total modules discovered: {len(modules)}")
+        return modules
+    
+    def instantiate_module(self, module_info: Dict[str, Any], **kwargs) -> Any:
+        """Instantiate a module."""
+        cls = module_info['main_class']
+        sig = inspect.signature(cls.__init__)
+        params = sig.parameters
+        
+        filtered_kwargs = {}
+        for key, value in kwargs.items():
+            if key in params or key == 'self':
+                filtered_kwargs[key] = value
+        
+        try:
+            return cls(**filtered_kwargs)
+        except Exception:
+            return cls()
+    
+    def run_module(self, module: Any, df: pd.DataFrame, dataset_id: str = "research",
+                   output_dir: Optional[Path] = None) -> Any:
+        """Run an already-instantiated module."""
+        if hasattr(module, 'run_dataframe'):
+            return module.run_dataframe(df, dataset_id=dataset_id, output_dir=output_dir)
+        if hasattr(module, 'run'):
+            return module.run(df, output_dir=output_dir)
+        raise ValueError(f"Module has no run_dataframe or run method")

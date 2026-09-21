@@ -1,0 +1,115 @@
+"""
+Aggregate Results - Loads all module results into a unified database.
+"""
+
+import pandas as pd
+from pathlib import Path
+from typing import Optional
+
+
+def aggregate_results(
+    research_dir: Path,
+    output_file: Optional[Path] = None
+) -> pd.DataFrame:
+    """
+    Aggregate all module results into a single master database.
+    
+    Args:
+        research_dir: Path to research_results directory
+        output_file: Path to output file (optional)
+    
+    Returns:
+        DataFrame: Aggregated results
+    """
+    research_dir = Path(research_dir)
+
+    if output_file is None:
+        output_file = research_dir / "master_database_aggregated.csv"
+
+    # ---------------------------------------------------------
+    # 1. Use existing master database if available
+    # ---------------------------------------------------------
+    master_path = research_dir / "master_database.csv"
+
+    if master_path.exists():
+        df = pd.read_csv(master_path)
+        print(f"Loaded existing master database: {len(df)} rows")
+        return df
+
+    # ---------------------------------------------------------
+    # 2. Otherwise aggregate raw module outputs
+    # ---------------------------------------------------------
+    raw_dir = research_dir / "raw"
+
+    if not raw_dir.exists():
+        print(f"Raw directory not found: {raw_dir}")
+        return pd.DataFrame()
+
+    all_data = []
+
+    for module_dir in sorted(raw_dir.iterdir()):
+        if not module_dir.is_dir():
+            continue
+
+        module_id = module_dir.name.replace("module", "")
+
+        for dataset_dir in sorted(module_dir.iterdir()):
+            if not dataset_dir.is_dir():
+                continue
+
+            dataset = dataset_dir.name
+
+            for csv_file in sorted(dataset_dir.glob("*.csv")):
+                try:
+                    df = pd.read_csv(csv_file)
+                    df["module_id"] = module_id
+                    df["dataset"] = dataset
+                    df["source_file"] = csv_file.name
+                    all_data.append(df)
+                except Exception as e:
+                    print(f"  ⚠ Could not read {csv_file}: {e}")
+
+    if not all_data:
+        print("No data found to aggregate")
+        return pd.DataFrame()
+
+    combined = pd.concat(all_data, ignore_index=True)
+
+    output_file = Path(output_file)
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+
+    combined.to_csv(output_file, index=False)
+
+    print(f"Aggregated {len(combined)} rows from {len(all_data)} files")
+    print(f"Saved to: {output_file}")
+
+    return combined
+
+
+def main():
+    """Main entry point."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Aggregate Research Results")
+    parser.add_argument(
+        "--research-dir",
+        type=str,
+        default="research_results",
+        help="Path to research_results directory"
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        help="Output file path"
+    )
+
+    args = parser.parse_args()
+
+    aggregate_results(
+        Path(args.research_dir),
+        Path(args.output) if args.output else None
+    )
+
+
+if __name__ == "__main__":
+    main()
