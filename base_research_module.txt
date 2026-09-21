@@ -3,9 +3,10 @@ Base Research Module
 
 Every research module must inherit from this class.
 
-UPDATED v3.10:
+UPDATED v3.12:
 - load_dataframe() copies BEFORE modifying to prevent caller DataFrame mutation
 - load_data() and load_dataframe() preserve previously injected features
+- set_dependency_features() unconditionally drops duplicate timestamp
 - set_dependency_features() merges features into self.df for backward compatibility
 - Automatic default artifact creation for legacy modules
 - Backward compatibility: self.df = self.market_df for legacy modules
@@ -134,12 +135,26 @@ class BaseResearchModule(ABC):
         
         IMPORTANT: 
         - Stores a copy to prevent memory sharing with ArtifactStore.
+        - Drops duplicate 'timestamp' column unconditionally, since
+          market data always owns the canonical timestamp.
         - Merges feature_df into self.df for backward compatibility.
         
         Args:
             feature_df: Combined feature DataFrame from dependencies
         """
         self.feature_df = feature_df.copy()
+
+        print("[DEBUG BASE] market columns:", self.market_df.columns.tolist() if self.market_df is not None else None)
+        print("[DEBUG BASE] incoming feature columns:", feature_df.columns.tolist())
+        print("[DEBUG BASE] copied feature columns:", self.feature_df.columns.tolist())
+        print("[DEBUG BASE] market has timestamp:", self.market_df is not None and 'timestamp' in self.market_df.columns)
+        print("[DEBUG BASE] feature has timestamp:", 'timestamp' in self.feature_df.columns)
+
+        # Market data always owns the canonical timestamp.
+        # Dependency artifacts may include timestamp only for alignment/metadata.
+        # Drop it unconditionally to prevent duplicate timestamp columns.
+        if 'timestamp' in self.feature_df.columns:
+            self.feature_df = self.feature_df.drop(columns=['timestamp'])
         
         # Backward compatibility: merge features into self.df
         if self.market_df is not None:
