@@ -1,0 +1,26 @@
+# atlas/core/math_utils.py
+"""
+Mathematical utilities.
+Pure math functions that don't involve financial concepts.
+"""
+
+import numpy as np
+from typing import Union
+
+def safe_divide(numerator: float, denominator: float, default: float = np.nan) -> float:
+    """Safe division with fallback"""
+    if denominator == 0 or np.isnan(denominator) or np.isinf(denominator):
+        return default
+    return numerator / denominator
+
+def rolling_apply(series, window: int, func):
+    """Apply function over rolling window"""
+    return series.rolling(window=window).apply(func)
+
+def z_score(series) -> np.ndarray:
+    """Calculate z-scores"""
+    mean = series.mean()
+    std = series.std()
+    if std == 0:
+        return np.zeros_like(series)
+    return (series - mean) / std

@@ -1,0 +1,243 @@
+"""
+Export Manager
+Handles all file output operations.
+
+UPDATED: Reports now include config snapshot, research protocol,
+and per-step execution timing.
+"""
+
+import pandas as pd
+import json
+from pathlib import Path
+from datetime import datetime
+from typing import Optional, Dict, Any
+from atlas.core.research_result import ResearchResult
+from atlas.core.logger import AtlasLogger
+
+
+class ExportManager:
+    """
+    Manages all research output exports.
+    
+    Reports are self-contained scientific documents with:
+    - Config snapshot
+    - Research protocol
+    - Step timing
+    - Dataset fingerprint
+    """
+    
+    def __init__(self, output_dir: str):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.logger = AtlasLogger("export_manager")
+    
+    def export_statistics(self, result: ResearchResult, filename: str = "statistics.csv"):
+        """Export statistics to CSV"""
+        df = pd.DataFrame([result.statistics])
+        df.insert(0, 'module', result.module_name)
+        df.insert(1, 'dataset', result.dataset_identifier)
+        
+        filepath = self.output_dir / filename
+        df.to_csv(filepath, index=False, encoding='utf-8')
+        self.logger.success(f"Statistics → {filepath}")
+    
+    def export_dataframe(self, df: pd.DataFrame, filename: str):
+        """Export any DataFrame to CSV"""
+        filepath = self.output_dir / filename
+        df.to_csv(filepath, index=False, encoding='utf-8')
+        self.logger.success(f"DataFrame → {filepath} ({len(df):,} rows)")
+    
+    def export_text(self, text: str, filename: str):
+        """
+        Export text artifact.
+        
+        Args:
+            text: Text content to export
+            filename: Output filename
+        
+        Returns:
+            Path: Path to the exported file
+        """
+        filepath = self.output_dir / filename
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(text)
+        self.logger.success(f"Text → {filepath} ({len(text):,} chars)")
+        return filepath
+    
+    def export_json(self, data: dict, filename: str):
+        """
+        Export dictionary as JSON.
+        
+        Args:
+            data: Dictionary to export
+            filename: Output filename
+        
+        Returns:
+            Path: Path to the exported file
+        """
+        filepath = self.output_dir / filename
+        
+        def serialize(obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            if isinstance(obj, pd.Timestamp):
+                return obj.isoformat()
+            if hasattr(obj, '__dict__'):
+                return str(obj)
+            return str(obj)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, default=serialize, ensure_ascii=False)
+        
+        self.logger.success(f"JSON → {filepath}")
+        return filepath
+    
+    def export_report(self, result: ResearchResult, 
+                      filename: str = "report.txt",
+                      config_snapshot: Optional[Dict[str, Any]] = None,
+                      protocol_snapshot: Optional[Dict[str, Any]] = None,
+                      step_timings: Optional[Dict[str, float]] = None) -> None:
+        """
+        Export comprehensive text report with full provenance.
+        
+        Report sections:
+        1. Module identification
+        2. Research protocol (question, hypothesis, methodology)
+        3. Configuration snapshot
+        4. Dataset fingerprint
+        5. Execution timing
+        6. Statistics
+        7. Diagnostics
+        """
+        filepath = self.output_dir / filename
+        
+        lines = []
+        lines.append("=" * 70)
+        lines.append("PROJECT ATLAS - RESEARCH REPORT")
+        lines.append("=" * 70)
+        
+        # Section 1: Module identification
+        lines.append(f"\n{'─' * 70}")
+        lines.append("MODULE IDENTIFICATION")
+        lines.append(f"{'─' * 70}")
+        lines.append(f"  Module: {result.module_name} v{result.module_version}")
+        lines.append(f"  Dataset: {result.dataset_identifier}")
+        lines.append(f"  Period: {result.timestamp_start} to {result.timestamp_end}")
+        lines.append(f"  Executed: {result.execution_timestamp}")
+        lines.append(f"  Status: {result.status}")
+        
+        # Section 2: Research Protocol
+        if protocol_snapshot:
+            lines.append(f"\n{'─' * 70}")
+            lines.append("RESEARCH PROTOCOL")
+            lines.append(f"{'─' * 70}")
+            
+            if 'question' in protocol_snapshot:
+                lines.append(f"\n  Research Question:")
+                lines.append(f"    {protocol_snapshot['question']}")
+            
+            if 'hypothesis' in protocol_snapshot:
+                lines.append(f"\n  Hypothesis:")
+                lines.append(f"    {protocol_snapshot['hypothesis']}")
+            
+            if 'methodology' in protocol_snapshot:
+                lines.append(f"\n  Methodology:")
+                for line in protocol_snapshot['methodology'].split('\n'):
+                    if line.strip():
+                        lines.append(f"    {line.strip()}")
+            
+            if 'depends_on' in protocol_snapshot:
+                deps = protocol_snapshot['depends_on']
+                if deps:
+                    lines.append(f"\n  Dependencies: {', '.join(deps)}")
+        
+        # Section 3: Configuration
+        if config_snapshot:
+            lines.append(f"\n{'─' * 70}")
+            lines.append("CONFIGURATION")
+            lines.append(f"{'─' * 70}")
+            for key, value in config_snapshot.items():
+                lines.append(f"  {key}: {value}")
+        
+        # Section 4: Dataset fingerprint
+        if result.diagnostics:
+            lines.append(f"\n{'─' * 70}")
+            lines.append("DATASET FINGERPRINT")
+            lines.append(f"{'─' * 70}")
+            for key in ['dataset_rows', 'dataset_columns', 'dataset_start', 'dataset_end']:
+                if key in result.diagnostics:
+                    label = key.replace('dataset_', '').replace('_', ' ').title()
+                    lines.append(f"  {label}: {result.diagnostics[key]}")
+        
+        # Section 5: Execution timing
+        if step_timings:
+            lines.append(f"\n{'─' * 70}")
+            lines.append("EXECUTION TIMING")
+            lines.append(f"{'─' * 70}")
+            total = 0
+            for name, duration in step_timings.items():
+                label = name.replace('step_', '').replace('_', ' ').title()
+                lines.append(f"  {label:<30} {duration:.3f}s")
+                total += duration
+            lines.append(f"  {'─' * 40}")
+            lines.append(f"  {'Total pipeline':<30} {total:.3f}s")
+        
+        # Also show load/validate timing
+        for key in ['load_data', 'validate', 'compute_total', 'export']:
+            if key in result.timing:
+                label = key.replace('_', ' ').title()
+                lines.append(f"  {label:<30} {result.timing[key]:.3f}s")
+        
+        # Section 6: Errors and warnings
+        if result.errors:
+            lines.append(f"\n{'─' * 70}")
+            lines.append("ERRORS")
+            lines.append(f"{'─' * 70}")
+            for error in result.errors:
+                lines.append(f"  ✗ {error}")
+        
+        if result.warnings:
+            lines.append(f"\n{'─' * 70}")
+            lines.append("WARNINGS")
+            lines.append(f"{'─' * 70}")
+            for warning in result.warnings:
+                lines.append(f"  ⚠ {warning}")
+        
+        # Section 7: Statistics
+        if result.statistics:
+            lines.append(f"\n{'─' * 70}")
+            lines.append("STATISTICS")
+            lines.append(f"{'─' * 70}")
+            for key, value in result.statistics.items():
+                if isinstance(value, float):
+                    lines.append(f"  {key:<40} {value:.8f}")
+                elif isinstance(value, int):
+                    lines.append(f"  {key:<40} {value:,}")
+                else:
+                    lines.append(f"  {key:<40} {value}")
+        
+        # Section 8: Diagnostics
+        if result.diagnostics:
+            lines.append(f"\n{'─' * 70}")
+            lines.append("DIAGNOSTICS")
+            lines.append(f"{'─' * 70}")
+            for key, value in result.diagnostics.items():
+                if key not in ['dataset_rows', 'dataset_columns', 'dataset_start', 'dataset_end']:
+                    lines.append(f"  {key:<40} {value}")
+        
+        lines.append(f"\n{'=' * 70}")
+        lines.append("END OF REPORT")
+        lines.append(f"{'=' * 70}")
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        
+        self.logger.success(f"Report → {filepath}")
+    
+    def export_all(self, result: ResearchResult):
+        """Export everything"""
+        self.export_statistics(result)
+        self.export_report(result)
+        
+        if result.artifacts:
+            self.export_json(result.artifacts, "artifacts.json")

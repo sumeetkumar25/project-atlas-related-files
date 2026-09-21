@@ -1,0 +1,107 @@
+# atlas/core/validation_utils.py
+"""
+Validation utilities.
+Data quality checks, structural validation.
+"""
+
+import pandas as pd
+import numpy as np
+from typing import Dict, Any, List
+
+def check_ohlc_integrity(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Validate OHLC price relationships.
+    
+    Checks:
+    - High >= Open
+    - High >= Close
+    - High >= Low
+    - Low <= Open
+    - Low <= Close
+    
+    Args:
+        df: OHLC DataFrame
+        
+    Returns:
+        Dictionary of violations
+    """
+    violations = {}
+    
+    if all(col in df.columns for col in ['high', 'open', 'close', 'low']):
+        violations['high_lt_open'] = (df['high'] < df['open']).sum()
+        violations['high_lt_close'] = (df['high'] < df['close']).sum()
+        violations['high_lt_low'] = (df['high'] < df['low']).sum()
+        violations['low_gt_open'] = (df['low'] > df['open']).sum()
+        violations['low_gt_close'] = (df['low'] > df['close']).sum()
+        violations['total_violations'] = sum(violations.values())
+    
+    return violations
+
+def check_data_quality(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    Check for common data quality issues.
+    
+    Args:
+        df: DataFrame to check
+        
+    Returns:
+        Dictionary of quality metrics
+    """
+    quality = {}
+    
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    
+    if len(numeric_cols) > 0:
+        quality['nan_count'] = df[numeric_cols].isna().sum().sum()
+        quality['inf_count'] = np.isinf(df[numeric_cols]).sum().sum()
+        quality['negative_prices'] = (df[numeric_cols] < 0).sum().sum() if len(numeric_cols) > 0 else 0
+    
+    # Duplicate check
+    if 'timestamp' in df.columns:
+        quality['duplicate_timestamps'] = df['timestamp'].duplicated().sum()
+    
+    # Zero values
+    price_cols = ['open', 'high', 'low', 'close']
+    for col in price_cols:
+        if col in df.columns:
+            quality[f'{col}_zeros'] = (df[col] == 0).sum()
+    
+    return quality
+
+def check_timestamp_integrity(df: pd.DataFrame, expected_freq: str = None) -> Dict[str, Any]:
+    """
+    Validate timestamp column.
+    
+    Args:
+        df: DataFrame with timestamp column
+        expected_freq: Expected frequency (e.g., '15min', '1h', '4h')
+        
+    Returns:
+        Dictionary of timestamp metrics
+    """
+    if 'timestamp' not in df.columns:
+        return {'error': 'No timestamp column'}
+    
+    ts = df['timestamp']
+    
+    metrics = {
+        'monotonic_increasing': ts.is_monotonic_increasing,
+        'duplicate_timestamps': ts.duplicated().sum(),
+        'total_rows': len(ts)
+    }
+    
+    # Gap analysis
+    if expected_freq:
+        ts_range = pd.date_range(start=ts.min(), end=ts.max(), freq=expected_freq)
+        missing = ts_range.difference(ts)
+        metrics['expected_rows'] = len(ts_range)
+        metrics['missing_rows'] = len(missing)
+        metrics['completeness_pct'] = (len(ts) / len(ts_range) * 100) if len(ts_range) > 0 else 0
+        
+        # Largest gap
+        if len(ts) > 1:
+            gaps = ts.diff().dropna()
+            metrics['max_gap'] = gaps.max()
+            metrics['mean_gap'] = gaps.mean()
+    
+    return metrics

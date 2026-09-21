@@ -1,0 +1,134 @@
+# atlas/core/returns_utils.py
+"""
+Return calculation utilities.
+Strictly return-related functions only.
+
+This module is the SINGLE SOURCE OF TRUTH for return calculations
+across all Atlas modules (001-008). It handles data hygiene so
+individual modules don't need to duplicate cleaning logic.
+"""
+
+import numpy as np
+import pandas as pd
+
+
+def log_returns(prices: pd.Series) -> pd.Series:
+    """
+    Calculate logarithmic returns with built-in data hygiene.
+    
+    This is the standard return calculation for all Atlas modules.
+    It handles:
+    - Type conversion to float
+    - Removal of NaN and Inf values
+    - Ensures clean output ready for statistical analysis
+    
+    Args:
+        prices: Series of asset prices (must be strictly positive)
+        
+    Returns:
+        Clean log-return series with NaN and Inf removed
+        
+    Raises:
+        ValueError: If input contains non-positive prices
+        ValueError: If resulting return series is empty
+    """
+    # Convert to float (handles string inputs gracefully)
+    prices = prices.astype(float)
+    
+    # Validate prices are strictly positive
+    if (prices <= 0).any():
+        n_bad = int((prices <= 0).sum())
+        raise ValueError(
+            f"Found {n_bad} non-positive price(s). "
+            f"Log returns require strictly positive prices. "
+            f"First bad index: {prices[prices <= 0].index[0]}"
+        )
+    
+    # Calculate log returns
+    returns = np.log(prices / prices.shift(1))
+    
+    # Remove infinite values and NaN
+    # Inf can occur if prices were exactly zero (already caught above)
+    # NaN occurs at the first observation (shift creates NaN)
+    returns = (
+        returns
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+    )
+    
+    # Validate output
+    if len(returns) == 0:
+        raise ValueError(
+            "Return series is empty after cleaning. "
+            "Check that input has at least 2 valid price observations."
+        )
+    
+    if returns.isna().any():
+        raise ValueError(
+            f"Return series contains {returns.isna().sum()} NaN values after cleaning."
+        )
+    
+    if np.isinf(returns).any():
+        raise ValueError(
+            f"Return series contains infinite values after cleaning."
+        )
+    
+    return returns
+
+
+def simple_returns(prices: pd.Series) -> pd.Series:
+    """
+    Calculate simple percentage returns with built-in data hygiene.
+    
+    Args:
+        prices: Series of asset prices
+        
+    Returns:
+        Clean simple return series (percentage)
+    """
+    prices = prices.astype(float)
+    
+    if (prices <= 0).any():
+        raise ValueError("Prices must be strictly positive for return calculation.")
+    
+    returns = prices.pct_change() * 100
+    
+    returns = (
+        returns
+        .replace([np.inf, -np.inf], np.nan)
+        .dropna()
+    )
+    
+    return returns
+
+
+def cumulative_returns(returns: pd.Series) -> pd.Series:
+    """
+    Calculate cumulative returns from period returns.
+    
+    Args:
+        returns: Series of period returns (in percentage)
+        
+    Returns:
+        Cumulative return series (starts at 1.0)
+    """
+    return (1 + returns / 100).cumprod()
+
+
+def returns_from_prices(prices: pd.Series, method: str = 'log') -> pd.Series:
+    """
+    Calculate returns from price series.
+    
+    Args:
+        prices: Price series
+        method: 'simple' or 'log'
+    
+    Returns:
+        Clean returns series
+    """
+    if method == 'log':
+        return log_returns(prices)
+    elif method == 'simple':
+        return simple_returns(prices)
+    else:
+        raise ValueError(f"Unknown method: {method}. Use 'simple' or 'log'.")

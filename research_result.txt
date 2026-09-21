@@ -1,0 +1,73 @@
+# atlas/core/research_result.py
+"""
+Standard Research Result Object
+Every module returns exactly this object.
+"""
+
+import time
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, List
+import pandas as pd
+
+@dataclass
+class ResearchResult:
+    """
+    Standardized research output container.
+    
+    This object is the contract between research modules and exporters.
+    Research produces it, exporters consume it.
+    """
+    
+    # Metadata
+    module_name: str
+    module_version: str
+    dataset_identifier: str
+    timestamp_start: str
+    timestamp_end: str
+    execution_timestamp: str
+    
+    # Statistics (numerical results)
+    statistics: Dict[str, Any] = field(default_factory=dict)
+    
+    # Diagnostics (quality metrics, warnings, issues)
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
+    
+    # Artifacts (DataFrames, series, plots)
+    artifacts: Dict[str, Any] = field(default_factory=dict)
+    
+    # Execution metadata
+    timing: Dict[str, float] = field(default_factory=dict)
+    status: str = "completed"  # completed, failed, partial
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    
+    def add_statistic(self, key: str, value: Any):
+        """Register a computed statistic"""
+        self.statistics[key] = value
+    
+    def add_diagnostic(self, key: str, value: Any):
+        """Register a diagnostic metric"""
+        self.diagnostics[key] = value
+    
+    def add_artifact(self, key: str, value: Any):
+        """Register a data artifact"""
+        self.artifacts[key] = value
+    
+    def add_timing(self, step: str, duration: float):
+        """Record execution time for a step"""
+        self.timing[step] = duration
+    
+    def add_warning(self, warning: str):
+        """Record a non-critical warning"""
+        self.warnings.append(warning)
+    
+    def to_summary_dict(self) -> Dict[str, Any]:
+        """Convert to flat dictionary for CSV export"""
+        summary = {
+            'module': self.module_name,
+            'dataset': self.dataset_identifier,
+            'status': self.status,
+            'execution_time': sum(self.timing.values()),
+            **self.statistics
+        }
+        return summary

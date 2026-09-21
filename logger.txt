@@ -1,0 +1,73 @@
+# atlas/core/logger.py
+"""
+Atlas Logger Module
+Handles formatted console output for research modules.
+"""
+
+from datetime import datetime
+from typing import Optional
+import sys
+
+from atlas.core.console import setup_console
+
+# Configure console encoding on import
+setup_console()
+
+
+class AtlasLogger:
+    """
+    Structured logger for Project Atlas research modules.
+    """
+    
+    def __init__(self, module_name: str, log_level: str = "INFO"):
+        self.module_name = module_name
+        self.log_level = log_level
+        self.section_separator = "=" * 80
+        self.sub_separator = "-" * 60
+    
+    def header(self, module_number: str, module_title: str):
+        """Print module header"""
+        print("\n" + self.section_separator)
+        print("PROJECT ATLAS")
+        print(f"MODULE {module_number}")
+        print(module_title.upper())
+        print(self.section_separator)
+    
+    def section(self, title: str):
+        """Print section header"""
+        print(f"\n{self.sub_separator}")
+        print(f"  {title}")
+        print(f"{self.sub_separator}")
+    
+    def info(self, message: str):
+        """Print info message"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] {message}")
+    
+    def success(self, message: str):
+        """Print success message"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] {message}")
+    
+    def warning(self, message: str):
+        """Print warning message"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] {message}", file=sys.stderr)
+    
+    def error(self, message: str):
+        """Print error message"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        print(f"[{timestamp}] {message}", file=sys.stderr)
+    
+    def metric(self, label: str, value: str, indent: int = 4):
+        """Print a metric with label"""
+        padding = " " * indent
+        print(f"{padding}{label:<30} {value}")
+    
+    def divider(self):
+        """Print a simple divider"""
+        print("-" * 60)
+    
+    def blank_line(self):
+        """Print blank line"""
+        print()

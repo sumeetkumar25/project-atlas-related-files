@@ -1,0 +1,27 @@
+"""
+Common result utilities for Project Atlas.
+"""
+
+
+def result_succeeded(result) -> bool:
+    """
+    Determine whether a research result represents successful execution.
+
+    Supports both string and Enum status values.
+    """
+    status = getattr(result, "status", None)
+
+    if status is None:
+        return False
+
+    if hasattr(status, "value"):
+        status = status.value
+
+    return str(status).strip().lower() in {
+        "completed",
+        "complete",
+        "success",
+        "successful",
+        "passed",
+        "pass",
+    }

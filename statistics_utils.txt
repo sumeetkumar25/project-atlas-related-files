@@ -1,0 +1,192 @@
+# atlas/core/statistics_utils.py
+"""
+Statistical utilities.
+Distribution analysis, descriptive statistics, tests.
+
+All statistical implementation details belong here.
+Research modules call these functions without knowing
+the underlying library implementations.
+"""
+
+import numpy as np
+import pandas as pd
+from scipy import stats as scipy_stats
+from statsmodels.stats.diagnostic import acorr_ljungbox
+from typing import Dict, Any
+from config import (
+    DEFAULT_LJUNG_BOX_LAGS,
+    DEFAULT_ACF_LAGS,
+    TAIL_SIGMA_THRESHOLD,
+    NORMALITY_ALPHA
+)
+from atlas.core.math_utils import safe_divide
+
+
+def descriptive_stats(series: pd.Series) -> Dict[str, float]:
+    """
+    Calculate comprehensive descriptive statistics.
+    
+    Kurtosis convention:
+    - kurtosis_excess: Fisher definition (excess over normal, normal = 0)
+    - kurtosis_pearson: Pearson definition (normal distribution = 3)
+    
+    Args:
+        series: Data series
+        
+    Returns:
+        Dictionary of statistics
+    """
+    clean = series.dropna()
+    
+    if len(clean) < 3:
+        return {}
+    
+    # Calculate kurtosis once
+    kurtosis_excess = clean.kurtosis()  # Fisher: excess over normal
+    
+    return {
+        'count': len(clean),
+        'mean': clean.mean(),
+        'median': clean.median(),
+        'std': clean.std(),
+        'variance': clean.var(),
+        'min': clean.min(),
+        'max': clean.max(),
+        'range': clean.max() - clean.min(),
+        'skewness': clean.skew(),
+        'kurtosis_excess': kurtosis_excess,           # Fisher: normal = 0
+        'kurtosis_pearson': kurtosis_excess + 3,      # Pearson: normal = 3
+        'percentile_1': clean.quantile(0.01),
+        'percentile_5': clean.quantile(0.05),
+        'percentile_25': clean.quantile(0.25),
+        'percentile_50': clean.quantile(0.50),
+        'percentile_75': clean.quantile(0.75),
+        'percentile_95': clean.quantile(0.95),
+        'percentile_99': clean.quantile(0.99),
+        'iqr': clean.quantile(0.75) - clean.quantile(0.25)
+    }
+
+
+def normality_tests(series: pd.Series) -> Dict[str, Any]:
+    """
+    Run battery of normality tests.
+    
+    Tests included:
+    - Shapiro-Wilk (works best for n < 5000)
+    - Jarque-Bera (based on skewness and kurtosis)
+    - Kolmogorov-Smirnov (compares to normal distribution)
+    
+    Args:
+        series: Data series
+        
+    Returns:
+        Dictionary of test results
+    """
+    clean = series.dropna()
+    
+    if len(clean) > 5000:
+        sample = clean.sample(5000, random_state=42)
+    else:
+        sample = clean
+    
+    # Shapiro-Wilk test
+    shapiro_stat, shapiro_p = scipy_stats.shapiro(sample)
+    
+    # Jarque-Bera test
+    jb_stat, jb_p = scipy_stats.jarque_bera(clean)
+    
+    # Kolmogorov-Smirnov test against normal
+    standardized = (clean - clean.mean()) / clean.std()
+    ks_stat, ks_p = scipy_stats.kstest(standardized, 'norm')
+    
+    return {
+        'shapiro_statistic': shapiro_stat,
+        'shapiro_p_value': shapiro_p,
+        'jarque_bera_statistic': jb_stat,
+        'jarque_bera_p_value': jb_p,
+        'ks_statistic': ks_stat,
+        'ks_p_value': ks_p,
+        'is_normal_at_5pct': shapiro_p > NORMALITY_ALPHA
+    }
+
+
+def tail_metrics(series: pd.Series, threshold_sigma: float = None) -> Dict[str, Any]:
+    """
+    Analyze tail behavior.
+    
+    Args:
+        series: Data series
+        threshold_sigma: Number of standard deviations for tail threshold
+                        Default from config: TAIL_SIGMA_THRESHOLD
+        
+    Returns:
+        Dictionary of tail metrics
+    """
+    if threshold_sigma is None:
+        threshold_sigma = TAIL_SIGMA_THRESHOLD
+    
+    clean = series.dropna()
+    std = clean.std()
+    mean = clean.mean()
+    threshold = threshold_sigma * std
+    
+    left_tail = clean[clean < mean - threshold]
+    right_tail = clean[clean > mean + threshold]
+    
+    return {
+        'threshold_sigma': threshold_sigma,
+        'threshold_value': threshold,
+        'left_tail_count': len(left_tail),
+        'left_tail_pct': (len(left_tail) / len(clean)) * 100 if len(clean) > 0 else 0,
+        'left_tail_mean': left_tail.mean() if len(left_tail) > 0 else np.nan,
+        'right_tail_count': len(right_tail),
+        'right_tail_pct': (len(right_tail) / len(clean)) * 100 if len(clean) > 0 else 0,
+        'right_tail_mean': right_tail.mean() if len(right_tail) > 0 else np.nan,
+        'tail_ratio': safe_divide(len(left_tail), len(right_tail)) if len(right_tail) > 0 else np.inf,
+        'max_deviation': max(abs(clean.min() - mean), abs(clean.max() - mean)) / std if std > 0 else np.inf
+    }
+
+
+def autocorrelation_metrics(series: pd.Series, lags: list = None) -> Dict[str, Any]:
+    """
+    Calculate autocorrelation metrics using Ljung-Box test.
+    
+    The Ljung-Box test is the correct test for autocorrelation in returns.
+    Implementation uses statsmodels for correctness.
+    
+    Args:
+        series: Data series
+        lags: List of lags for ACF calculation (default from config: DEFAULT_ACF_LAGS)
+        
+    Returns:
+        Dictionary of autocorrelation results
+    """
+    if lags is None:
+        lags = DEFAULT_ACF_LAGS
+    
+    clean = series.dropna()
+    
+    acf_values = {}
+    
+    # Calculate ACF for each specified lag
+    for lag in lags:
+        if lag < len(clean):
+            acf_values[f'acf_lag_{lag}'] = clean.autocorr(lag=lag)
+    
+    # Ljung-Box test for serial correlation
+    # Configurable max lag from config.py
+    max_lag = min(DEFAULT_LJUNG_BOX_LAGS, len(clean) // 5)
+    
+    if max_lag > 1:
+        # Use statsmodels acorr_ljungbox (correct implementation)
+        lb_result = acorr_ljungbox(
+            clean,
+            lags=[max_lag],
+            return_df=True
+        )
+        
+        acf_values['ljung_box_stat'] = float(lb_result["lb_stat"].iloc[0])
+        acf_values['ljung_box_p_value'] = float(lb_result["lb_pvalue"].iloc[0])
+        acf_values['ljung_box_lag'] = max_lag
+    
+    return acf_values

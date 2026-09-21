@@ -1,0 +1,21 @@
+# atlas/core/formatting_utils.py
+"""
+Formatting utilities.
+String formatting, display helpers only.
+"""
+
+def format_pct(value: float, decimals: int = 4) -> str:
+    """Format as percentage string"""
+    return f"{value:.{decimals}f}%"
+
+def format_decimal(value: float, decimals: int = 6) -> str:
+    """Format as decimal string"""
+    return f"{value:.{decimals}f}"
+
+def format_large_number(value: int) -> str:
+    """Format with thousands separator"""
+    return f"{value:,}"
+
+def format_scientific(value: float, decimals: int = 4) -> str:
+    """Format in scientific notation"""
+    return f"{value:.{decimals}e}"
