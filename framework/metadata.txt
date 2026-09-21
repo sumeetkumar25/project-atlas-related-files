@@ -1,0 +1,216 @@
+"""
+Dataset metadata and fingerprinting.
+Every dataset in Atlas carries rich metadata for reproducibility.
+"""
+
+import hashlib
+import json
+from pathlib import Path
+from dataclasses import dataclass, asdict, fields
+from datetime import datetime
+from typing import Optional
+import pandas as pd
+
+
+@dataclass
+class DatasetDescriptor:
+    """
+    Rich dataset metadata.
+    Every dataset processed by Atlas receives this descriptor.
+    """
+    exchange: str
+    symbol: str
+    timeframe: str
+    timezone: str = "UTC"
+    rows: int = 0
+    start: str = ""
+    end: str = ""
+    filepath: str = ""
+    file_size_mb: float = 0.0
+    columns: list = None
+    fingerprint: Optional[str] = None  # SHA256 fingerprint
+    
+    def __post_init__(self):
+        if self.columns is None:
+            self.columns = []
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary"""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'DatasetDescriptor':
+        """
+        Create from dictionary with forward compatibility.
+        
+        Only uses fields that exist in the dataclass definition.
+        Extra fields (like nested fingerprint objects) are ignored.
+        This ensures backward/forward compatibility as the class evolves.
+        
+        Normalizes legacy fingerprint representation.
+        DatasetDescriptor.fingerprint stores only SHA-256.
+        """
+        # Get valid field names from dataclass definition
+        valid_fields = {f.name for f in fields(cls)}
+        
+        # Filter dictionary to only include valid fields
+        filtered_data = {
+            k: v for k, v in data.items() 
+            if k in valid_fields
+        }
+        
+        # Normalize legacy fingerprint representation.
+        # DatasetDescriptor.fingerprint stores only SHA-256.
+        if "fingerprint" in filtered_data:
+            fingerprint = filtered_data["fingerprint"]
+            
+            if isinstance(fingerprint, dict):
+                filtered_data["fingerprint"] = fingerprint.get(
+                    "sha256",
+                    None
+                )
+            elif fingerprint is not None:
+                filtered_data["fingerprint"] = str(fingerprint)
+        
+        return cls(**filtered_data)
+    
+    @classmethod
+    def from_dataframe(cls, df: pd.DataFrame, filepath: str, 
+                       exchange: str = "Delta Exchange",
+                       symbol: str = "BTCUSD",
+                       timeframe: str = "unknown") -> 'DatasetDescriptor':
+        """
+        Create descriptor from a loaded DataFrame.
+        
+        Args:
+            df: Loaded DataFrame
+            filepath: Path to data file
+            exchange: Exchange name
+            symbol: Trading symbol
+            timeframe: Data timeframe
+            
+        Returns:
+            DatasetDescriptor instance
+        """
+        path = Path(filepath)
+        
+        descriptor = cls(
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            timezone="UTC",
+            rows=len(df),
+            filepath=str(path.absolute()),
+            file_size_mb=path.stat().st_size / (1024 * 1024) if path.exists() else 0.0,
+            columns=list(df.columns)
+        )
+        
+        # Extract time range if timestamp column exists
+        if 'timestamp' in df.columns:
+            descriptor.start = str(df['timestamp'].min())
+            descriptor.end = str(df['timestamp'].max())
+        
+        return descriptor
+    
+    def summary(self) -> str:
+        """Generate human-readable summary"""
+        lines = []
+        lines.append(f"Dataset: {self.symbol} ({self.timeframe})")
+        lines.append(f"Exchange: {self.exchange}")
+        lines.append(f"Period: {self.start} to {self.end}")
+        lines.append(f"Rows: {self.rows:,}")
+        lines.append(f"Size: {self.file_size_mb:.2f} MB")
+        lines.append(f"Columns: {', '.join(self.columns)}")
+        if self.fingerprint:
+            lines.append(f"Fingerprint: {self.fingerprint[:16]}...")
+        return "\n".join(lines)
+
+
+class DatasetFingerprint:
+    """
+    Cryptographic fingerprint for dataset verification.
+    Guarantees reproducibility across research runs.
+    """
+    
+    @staticmethod
+    def compute_file_hash(filepath: str, algorithm: str = 'sha256') -> str:
+        """
+        Compute cryptographic hash of file.
+        
+        Args:
+            filepath: Path to file
+            algorithm: Hash algorithm (sha256, md5)
+            
+        Returns:
+            Hex digest string
+        """
+        hasher = hashlib.new(algorithm)
+        
+        with open(filepath, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                hasher.update(chunk)
+        
+        return hasher.hexdigest()
+    
+    @staticmethod
+    def compute_dataframe_hash(df: pd.DataFrame) -> str:
+        """
+        Compute hash of DataFrame content.
+        
+        Args:
+            df: DataFrame to hash
+            
+        Returns:
+            Hash string
+        """
+        # Use CSV representation for hashing
+        csv_bytes = df.to_csv(index=False).encode('utf-8')
+        return hashlib.sha256(csv_bytes).hexdigest()
+    
+    @staticmethod
+    def create_fingerprint(filepath: str, df: Optional[pd.DataFrame] = None) -> dict:
+        """
+        Create complete fingerprint for a dataset.
+        
+        Args:
+            filepath: Path to data file
+            df: Optional loaded DataFrame
+            
+        Returns:
+            Dictionary with fingerprint data
+        """
+        path = Path(filepath)
+        
+        fingerprint = {
+            'filepath': str(path.absolute()),
+            'filename': path.name,
+            'file_size_bytes': path.stat().st_size if path.exists() else 0,
+            'sha256': DatasetFingerprint.compute_file_hash(filepath) if path.exists() else None,
+            'created_at': datetime.now().isoformat(),
+        }
+        
+        if df is not None:
+            fingerprint.update({
+                'rows': len(df),
+                'columns': list(df.columns),
+                'data_hash': DatasetFingerprint.compute_dataframe_hash(df),
+                'timestamp_start': str(df['timestamp'].min()) if 'timestamp' in df.columns else None,
+                'timestamp_end': str(df['timestamp'].max()) if 'timestamp' in df.columns else None,
+            })
+        
+        return fingerprint
+    
+    @staticmethod
+    def verify_fingerprint(filepath: str, stored_hash: str) -> bool:
+        """
+        Verify file matches stored fingerprint.
+        
+        Args:
+            filepath: Path to file
+            stored_hash: Previously computed hash
+            
+        Returns:
+            True if file matches
+        """
+        current_hash = DatasetFingerprint.compute_file_hash(filepath)
+        return current_hash == stored_hash

@@ -1,0 +1,240 @@
+"""
+Topological Sort - Determine optimal execution order for modules.
+"""
+
+from typing import List, Dict, Set, Optional
+import re
+
+
+def get_module_id_from_name(folder_name: str) -> str:
+    """
+    Extract module ID from folder name.
+    
+    Args:
+        folder_name: Folder name (e.g., "module001_return_distribution")
+    
+    Returns:
+        str: Module ID (e.g., "001")
+    """
+    match = re.match(r"module(\d+)", folder_name)
+    if match:
+        return match.group(1)
+    return folder_name.replace('module', '')
+
+
+def _get_depends_on(module: Dict) -> List[str]:
+    """
+    Get dependencies from module dict, supporting both top-level and metadata.
+    
+    Args:
+        module: Module info dict
+    
+    Returns:
+        list: Dependency module IDs
+    """
+    # Check top-level depends_on first
+    depends = module.get('depends_on')
+    
+    if depends is None:
+        # Check metadata
+        metadata = module.get('metadata', {})
+        depends = metadata.get('depends_on', [])
+    
+    # Ensure it's a list
+    if not isinstance(depends, list):
+        depends = []
+    
+    return depends
+
+
+def topological_sort(modules: List[Dict]) -> List[Dict]:
+    """
+    Sort modules topologically based on dependencies.
+    
+    Args:
+        modules: List of module info dicts with 'module_id' and 'depends_on' keys
+    
+    Returns:
+        list: Modules in execution order
+    
+    Raises:
+        ValueError: If circular dependency or missing dependency is detected
+    """
+    # Build dependency graph
+    graph: Dict[str, Set[str]] = {}
+    all_modules: Dict[str, Dict] = {}
+    
+    for module in modules:
+        module_id = module['module_id']
+        all_modules[module_id] = module
+        
+        depends = _get_depends_on(module)
+        graph[module_id] = set(depends)
+    
+    # Save original graph for cycle diagnosis (never modified)
+    original_graph = {
+        module_id: deps.copy()
+        for module_id, deps in graph.items()
+    }
+    
+    # ---------------------------------------------------------
+    # Validate dependency completeness
+    # ---------------------------------------------------------
+    all_module_ids = set(all_modules.keys())
+    missing_dependencies = {}
+    
+    for module_id, deps in graph.items():
+        missing = deps - all_module_ids
+        
+        if missing:
+            missing_dependencies[module_id] = sorted(missing)
+    
+    if missing_dependencies:
+        details = "; ".join(
+            f"{module_id}: {deps}"
+            for module_id, deps in sorted(missing_dependencies.items())
+        )
+        
+        raise ValueError(
+            "Missing module dependencies detected: "
+            f"{details}"
+        )
+    
+    # Topological sort (Kahn's algorithm)
+    in_degree = {module_id: len(deps) for module_id, deps in graph.items()}
+    
+    # Start with modules that have no dependencies
+    queue = [module_id for module_id, degree in in_degree.items() if degree == 0]
+    
+    sorted_modules = []
+    
+    while queue:
+        module_id = queue.pop(0)
+        sorted_modules.append(all_modules[module_id])
+        
+        # Remove this module from dependencies of others
+        for other_id, deps in graph.items():
+            if module_id in deps:
+                graph[other_id].remove(module_id)
+                in_degree[other_id] -= 1
+                if in_degree[other_id] == 0:
+                    queue.append(other_id)
+    
+    # ---------------------------------------------------------
+    # Cycle diagnosis using the ORIGINAL graph
+    # FIXED: Correctly distinguishes DAG nodes from cycles
+    # ---------------------------------------------------------
+    if len(sorted_modules) != len(modules):
+
+        remaining = (
+            set(all_modules.keys())
+            - {m['module_id'] for m in sorted_modules}
+        )
+
+        visited = set()
+        visiting = set()
+        path = []
+
+        def find_cycle(current):
+            """
+            DFS cycle detection.
+
+            `visiting` contains nodes currently on the recursion stack.
+            Encountering a node in `visiting` proves a cycle.
+            """
+            if current in visiting:
+                cycle_start = path.index(current)
+                return path[cycle_start:] + [current]
+
+            if current in visited:
+                return None
+
+            visiting.add(current)
+            path.append(current)
+
+            for dependency in original_graph.get(current, set()):
+
+                # Only inspect unresolved nodes.
+                if dependency not in all_modules:
+                    continue
+
+                cycle = find_cycle(dependency)
+
+                if cycle:
+                    return cycle
+
+            path.pop()
+            visiting.remove(current)
+            visited.add(current)
+
+            return None
+
+        cycle = None
+
+        for module_id in sorted(remaining):
+            cycle = find_cycle(module_id)
+
+            if cycle:
+                break
+
+        if cycle:
+            cycle_str = " -> ".join(cycle)
+        else:
+            cycle_str = ", ".join(sorted(remaining))
+
+        raise ValueError(
+            f"Circular dependency detected: {cycle_str}"
+        )
+    
+    return sorted_modules
+
+
+def get_execution_order(modules: List[Dict], root_module: Optional[str] = None) -> List[Dict]:
+    """
+    Get execution order starting from a root module.
+    
+    Args:
+        modules: List of module info dicts
+        root_module: Optional root module ID to start from
+    
+    Returns:
+        list: Modules in execution order
+    
+    Raises:
+        ValueError: If root_module not found in available modules
+    """
+    if root_module:
+        available_ids = {
+            m["module_id"]
+            for m in modules
+        }
+
+        if root_module not in available_ids:
+            raise ValueError(
+                f"Module {root_module} not found. "
+                f"Available modules: "
+                f"{sorted(available_ids)}"
+            )
+        
+        # Filter to only modules needed for root
+        needed = set()
+        to_process = [root_module]
+        
+        while to_process:
+            current = to_process.pop()
+            if current in needed:
+                continue
+            needed.add(current)
+            
+            # Find module info
+            for module in modules:
+                if module['module_id'] == current:
+                    depends = _get_depends_on(module)
+                    for dep in depends:
+                        to_process.append(dep)
+                    break
+        
+        filtered_modules = [m for m in modules if m['module_id'] in needed]
+        return topological_sort(filtered_modules)
+    
+    return topological_sort(modules)

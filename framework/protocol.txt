@@ -1,0 +1,343 @@
+# atlas/framework/protocol.py
+"""
+Research Protocol Definition.
+Every module begins with a research protocol that defines its scientific methodology.
+"""
+
+from dataclasses import dataclass, field, asdict
+from typing import List, Dict, Optional
+from datetime import datetime
+from enum import Enum
+import hashlib
+from pathlib import Path
+
+
+class ModuleStatus(str, Enum):
+    """Module lifecycle status with clear progression"""
+    PLANNED = "Planned"
+    IN_PROGRESS = "In Progress"
+    COMPLETED = "Completed"
+    VALIDATED = "Validated"
+    FROZEN = "Frozen"
+    DEPRECATED = "Deprecated"
+    ARCHIVED = "Archived"
+    
+    def can_transition_to(self, target: 'ModuleStatus') -> bool:
+        valid_transitions = {
+            ModuleStatus.PLANNED: [ModuleStatus.IN_PROGRESS, ModuleStatus.DEPRECATED],
+            ModuleStatus.IN_PROGRESS: [ModuleStatus.COMPLETED, ModuleStatus.DEPRECATED],
+            ModuleStatus.COMPLETED: [ModuleStatus.VALIDATED, ModuleStatus.FROZEN, ModuleStatus.IN_PROGRESS],
+            ModuleStatus.VALIDATED: [ModuleStatus.FROZEN, ModuleStatus.IN_PROGRESS],
+            ModuleStatus.FROZEN: [ModuleStatus.DEPRECATED],
+            ModuleStatus.DEPRECATED: [ModuleStatus.ARCHIVED],
+            ModuleStatus.ARCHIVED: [],
+        }
+        return target in valid_transitions.get(self, [])
+
+
+class ModuleCategory(str, Enum):
+    """Module classification"""
+    DATA_QUALITY = "Data Quality"
+    DISTRIBUTION = "Distribution Analysis"
+    VOLATILITY = "Volatility Analysis"
+    CORRELATION = "Correlation Analysis"
+    REGIME = "Regime Detection"
+    MICROSTRUCTURE = "Market Microstructure"
+    FEATURE = "Feature Engineering"
+    VALIDATION = "Validation"
+    STRATEGY = "Strategy Research"
+    PRICE_BEHAVIOR = "Price Behavior"
+    VOLUME_BEHAVIOR = "Volume Behavior"
+
+
+@dataclass
+class StatusTransition:
+    from_status: str
+    to_status: str
+    timestamp: str
+    reason: str = ""
+    
+    def to_dict(self) -> dict:
+        return {
+            'from': self.from_status,
+            'to': self.to_status,
+            'timestamp': self.timestamp,
+            'reason': self.reason
+        }
+
+
+@dataclass
+class ModuleFingerprint:
+    module_id: str
+    version: str
+    source_hash: str = ""
+    protocol_hash: str = ""
+    validation_hash: str = ""
+    frozen_hash: str = ""
+    created_at: str = ""
+    
+    def to_dict(self) -> dict:
+        return {
+            'module_id': self.module_id,
+            'version': self.version,
+            'source_hash': self.source_hash,
+            'protocol_hash': self.protocol_hash,
+            'validation_hash': self.validation_hash,
+            'frozen_hash': self.frozen_hash,
+            'created_at': self.created_at
+        }
+    
+    def is_intact(self) -> bool:
+        """
+        Verify that the frozen fingerprint matches the current state.
+        
+        FIXED: Now properly verifies the frozen hash against source, protocol, and validation hashes.
+        
+        Returns:
+            bool: True if fingerprint is intact (or no frozen hash exists)
+        """
+        if not self.frozen_hash:
+            return True
+
+        if not self.source_hash:
+            return False
+
+        combined = (
+            f"{self.source_hash}"
+            f"{self.protocol_hash}"
+            f"{self.validation_hash}"
+        )
+
+        expected = hashlib.sha256(
+            combined.encode()
+        ).hexdigest()
+
+        return expected == self.frozen_hash
+
+
+@dataclass
+class ResearchProtocol:
+    module_id: str
+    module_name: str
+    category: ModuleCategory
+    question: str
+    hypothesis: str
+    rationale: str
+    methodology: str
+    statistics: List[str] = field(default_factory=list)
+    depends_on: List[str] = field(default_factory=list)
+    required_datasets: List[str] = field(default_factory=list)
+    author: str = "Project Atlas"
+    version: str = "1.0.0"
+    created_date: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
+    status: ModuleStatus = ModuleStatus.PLANNED
+    validated: bool = False
+    validation_date: Optional[str] = None
+    completion_date: Optional[str] = None
+    status_history: List[dict] = field(default_factory=list)
+    fingerprint: Optional[dict] = None
+    limitations: List[str] = field(default_factory=list)
+    conclusions: List[str] = field(default_factory=list)
+    future_research: List[str] = field(default_factory=list)
+    references: List[str] = field(default_factory=list)
+    produces: List[str] = field(default_factory=list)
+    
+    def __post_init__(self):
+        if not self.status_history:
+            self.status_history = [{
+                'from': 'None',
+                'to': self.status.value,
+                'timestamp': datetime.now().isoformat(),
+                'reason': 'Module created'
+            }]
+    
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d['status'] = self.status.value
+        d['category'] = self.category.value
+        return d
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'ResearchProtocol':
+        if 'status' in data:
+            data['status'] = ModuleStatus(data['status'])
+        if 'category' in data:
+            data['category'] = ModuleCategory(data['category'])
+        if 'status_history' not in data:
+            data['status_history'] = []
+        if 'fingerprint' not in data:
+            data['fingerprint'] = None
+        return cls(**data)
+    
+    def transition_to(self, new_status: ModuleStatus, reason: str = "") -> bool:
+        if not self.status.can_transition_to(new_status):
+            valid = [s.value for s in ModuleStatus if self.status.can_transition_to(s)]
+            raise ValueError(
+                f"Invalid transition: {self.status.value} → {new_status.value}. "
+                f"Valid: {valid}"
+            )
+        old_status = self.status
+        transition = {
+            'from': old_status.value,
+            'to': new_status.value,
+            'timestamp': datetime.now().isoformat(),
+            'reason': reason
+        }
+        self.status_history.append(transition)
+        self.status = new_status
+        if new_status == ModuleStatus.COMPLETED:
+            self.completion_date = datetime.now().strftime("%Y-%m-%d")
+        if new_status == ModuleStatus.VALIDATED:
+            self.validated = True
+            self.validation_date = datetime.now().strftime("%Y-%m-%d")
+        if new_status == ModuleStatus.FROZEN:
+            self.status_history[-1]['frozen'] = True
+        return True
+    
+    def get_audit_trail(self) -> str:
+        lines = []
+        lines.append("=" * 60)
+        lines.append(f"AUDIT TRAIL: Module {self.module_id}")
+        lines.append("=" * 60)
+        for i, entry in enumerate(self.status_history):
+            timestamp = entry['timestamp'][:19]
+            lines.append(f"\n  [{i+1}] {timestamp}")
+            lines.append(f"      {entry['from']} → {entry['to']}")
+            if entry.get('reason'):
+                lines.append(f"      Reason: {entry['reason']}")
+        if self.fingerprint:
+            lines.append(f"\n  Fingerprint: {self.fingerprint.get('source_hash', 'N/A')[:16]}...")
+        lines.append("=" * 60)
+        return "\n".join(lines)
+    
+    def compute_source_hash(self, source_path: str) -> str:
+        try:
+            path = Path(source_path)
+            if path.exists():
+                with open(path, 'rb') as f:
+                    return hashlib.sha256(f.read()).hexdigest()
+        except Exception:
+            pass
+        return ""
+    
+    def create_fingerprint(self, source_path: str = "", validation_data: str = "") -> dict:
+        fingerprint = {
+            'module_id': self.module_id,
+            'version': self.version,
+            'created_at': datetime.now().isoformat(),
+            'source_hash': self.compute_source_hash(source_path) if source_path else "",
+            'protocol_hash': hashlib.sha256(
+                f"{self.question}{self.hypothesis}{self.methodology}".encode()
+            ).hexdigest(),
+            'validation_hash': hashlib.sha256(validation_data.encode()).hexdigest() if validation_data else "",
+            'frozen_hash': "",
+        }
+        if self.status == ModuleStatus.FROZEN:
+            combined = f"{fingerprint['source_hash']}{fingerprint['protocol_hash']}{fingerprint['validation_hash']}"
+            fingerprint['frozen_hash'] = hashlib.sha256(combined.encode()).hexdigest()
+        self.fingerprint = fingerprint
+        return fingerprint
+    
+    def verify_fingerprint(self, source_path: str = "") -> bool:
+        """
+        Verify module source integrity and, when frozen, verify
+        the complete frozen fingerprint.
+        
+        FIXED: Now verifies the frozen hash when module is frozen.
+        """
+        if not self.fingerprint:
+            return False
+
+        stored_source_hash = self.fingerprint.get(
+            'source_hash',
+            ''
+        )
+
+        # ---------------------------------------------------------
+        # Verify source file when a source path is supplied
+        # ---------------------------------------------------------
+        if source_path and stored_source_hash:
+            current_source_hash = self.compute_source_hash(
+                source_path
+            )
+
+            if current_source_hash != stored_source_hash:
+                return False
+
+        # ---------------------------------------------------------
+        # If module is frozen, verify the complete frozen hash
+        # ---------------------------------------------------------
+        frozen_hash = self.fingerprint.get(
+            'frozen_hash',
+            ''
+        )
+
+        if frozen_hash:
+            source_hash = self.fingerprint.get(
+                'source_hash',
+                ''
+            )
+
+            protocol_hash = self.fingerprint.get(
+                'protocol_hash',
+                ''
+            )
+
+            validation_hash = self.fingerprint.get(
+                'validation_hash',
+                ''
+            )
+
+            combined = (
+                f"{source_hash}"
+                f"{protocol_hash}"
+                f"{validation_hash}"
+            )
+
+            expected_frozen_hash = hashlib.sha256(
+                combined.encode()
+            ).hexdigest()
+
+            if expected_frozen_hash != frozen_hash:
+                return False
+
+        return True
+    
+    def validate_protocol(self) -> List[str]:
+        issues = []
+        if not self.question:
+            issues.append("Research question is empty")
+        if not self.hypothesis:
+            issues.append("Hypothesis is empty")
+        if not self.methodology:
+            issues.append("Methodology is empty")
+        if not self.statistics:
+            issues.append("No statistics defined")
+        if self.module_id == "":
+            issues.append("Module ID is empty")
+        return issues
+    
+    def summary(self) -> str:
+        lines = []
+        lines.append("=" * 60)
+        lines.append(f"RESEARCH PROTOCOL: {self.module_id} - {self.module_name}")
+        lines.append("=" * 60)
+        lines.append(f"\nStatus: {self.status.value}")
+        lines.append(f"Category: {self.category.value}")
+        lines.append(f"Version: {self.version}")
+        lines.append(f"\nQUESTION:")
+        lines.append(f"  {self.question}")
+        lines.append(f"\nHYPOTHESIS:")
+        lines.append(f"  {self.hypothesis}")
+        lines.append(f"\nMETHODOLOGY:")
+        lines.append(f"  {self.methodology}")
+        if self.depends_on:
+            lines.append(f"\nDEPENDENCIES: {', '.join(self.depends_on)}")
+        if self.produces:
+            lines.append(f"\nPRODUCES: {', '.join(self.produces)}")
+        if len(self.status_history) > 1:
+            lines.append(f"\nAUDIT TRAIL: {len(self.status_history)} transitions")
+        if self.validated:
+            lines.append(f"\nVALIDATED: {self.validation_date}")
+        lines.append("=" * 60)
+        return "\n".join(lines)

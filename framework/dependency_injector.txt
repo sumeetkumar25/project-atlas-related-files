@@ -1,0 +1,202 @@
+"""
+Dependency Injector - Builds feature DataFrames from dependencies with dataset awareness.
+"""
+
+from typing import List, Optional, Dict, Any
+import pandas as pd
+from .artifact_store import ArtifactStore
+
+
+class DependencyInjector:
+    """
+    Builds combined feature DataFrames from dependent modules.
+    
+    Every module must export 'features' in its artifacts.
+    Dataset-aware: only uses artifacts from the same dataset.
+    """
+    
+    def __init__(self, artifact_store: ArtifactStore):
+        """
+        Initialize the dependency injector.
+        
+        Args:
+            artifact_store: The artifact store to pull from
+        """
+        self.artifact_store = artifact_store
+        self._injection_log = []
+    
+    def build_feature_dataframe(self, dataset: str, dependencies: List[str]) -> Optional[pd.DataFrame]:
+        """
+        Build a combined feature DataFrame from dependencies for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier (e.g., "15m", "1h", "4h")
+            dependencies: List of dependency module IDs
+        
+        Returns:
+            DataFrame: Combined features
+        
+        Raises:
+            RuntimeError: If a module did not export features
+        """
+        if not dependencies:
+            return None
+        
+        feature_frames = []
+        injection_details = []
+        
+        for dep in dependencies:
+            artifacts = self.artifact_store.get(dataset, dep)
+            
+            if not artifacts:
+                raise RuntimeError(
+                    f"No artifacts found for dependency {dep} on dataset {dataset}"
+                )
+            
+            if "features" not in artifacts:
+                raise RuntimeError(
+                    f"Module {dep} did not export 'features' on dataset {dataset}. "
+                    f"Available: {list(artifacts.keys())}"
+                )
+            
+            feature_df = artifacts["features"]
+            feature_frames.append(feature_df)
+            
+            injection_details.append({
+                'dependency': dep,
+                'columns': list(feature_df.columns),
+                'rows': len(feature_df),
+                'artifact_keys': list(artifacts.keys())
+            })
+        
+        if not feature_frames:
+            return None
+        
+        # Log injection details
+        self._injection_log.append({
+            'dataset': dataset,
+            'dependencies': injection_details,
+            'total_features': sum(len(df.columns) for df in feature_frames)
+        })
+        
+        # Concatenate all feature DataFrames
+        combined = pd.concat(feature_frames, axis=1)
+        
+        # Handle duplicate columns
+        duplicates = combined.columns.duplicated()
+        if duplicates.any():
+            duplicate_cols = combined.columns[duplicates].tolist()
+            
+            # Rename only duplicate columns with source prefix
+            for col in duplicate_cols:
+                for i, frame in enumerate(feature_frames):
+                    if col in frame.columns:
+                        dep_id = dependencies[i]
+                        combined.rename(columns={col: f"{dep_id}_{col}"}, inplace=True)
+                        break
+        
+        return combined
+    
+    def validate_dependencies(self, dataset: str, module_id: str, dependencies: List[str], 
+                              completed_modules: set) -> bool:
+        """
+        Validate that all dependencies are satisfied for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: The module's ID
+            dependencies: List of dependency module IDs
+            completed_modules: Set of completed (dataset, module_id) tuples
+        
+        Returns:
+            bool: True if all dependencies are satisfied
+        
+        Raises:
+            RuntimeError: If a dependency is not satisfied
+        """
+        for dep_id in dependencies:
+            dep_key = (dataset, dep_id)
+            if dep_key not in completed_modules:
+                raise RuntimeError(
+                    f"Module {module_id} on {dataset} requires {dep_id}, but it has not been completed"
+                )
+            
+            if not self.artifact_store.has_module(dataset, dep_id):
+                raise RuntimeError(
+                    f"Module {module_id} on {dataset} requires {dep_id}, but no artifacts found"
+                )
+            
+            if not self.artifact_store.has(dataset, dep_id, "features"):
+                raise RuntimeError(
+                    f"Module {module_id} on {dataset} requires {dep_id}, but it did not export 'features'"
+                )
+            
+            # Verify required columns exist
+            features = self.artifact_store.get_features(dataset, dep_id)
+            if features is not None and features.empty:
+                raise RuntimeError(
+                    f"Module {module_id} on {dataset} requires {dep_id}, but its features DataFrame is empty"
+                )
+        
+        return True
+    
+    def get_injection_log(self) -> List[Dict]:
+        """
+        Get the injection log.
+        
+        Returns:
+            list: Injection log entries
+        """
+        return self._injection_log.copy()
+    
+    def clear_log(self) -> None:
+        """Clear the injection log."""
+        self._injection_log.clear()
+    
+    def log_dependency_summary(self, dataset: str, module_id: str, dependencies: List[str]) -> None:
+        """
+        Log a summary of dependencies for debugging.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+            dependencies: List of dependency module IDs
+        """
+        print(f"\n{'='*60}")
+        print(f"DEPENDENCY INJECTION")
+        print(f"{'='*60}")
+        print(f"Module: {module_id}")
+        print(f"Dataset: {dataset}")
+        print(f"Dependencies: {dependencies}")
+        print("-" * 40)
+        
+        for dep in dependencies:
+            artifacts = self.artifact_store.get(dataset, dep)
+            if artifacts and "features" in artifacts:
+                df = artifacts["features"]
+                print(f"✓ {dep}: {len(df.columns)} columns, {len(df)} rows")
+                print(f"  Columns: {list(df.columns)[:5]}{'...' if len(df.columns) > 5 else ''}")
+                print(f"  Has validation: {'validation' in artifacts}")
+                print(f"  Has statistics: {'statistics' in artifacts}")
+            else:
+                print(f"✗ {dep}: NOT FOUND or missing 'features'")
+        
+        print("="*60)
+    
+    def get_feature_columns(self, dataset: str, dependencies: List[str]) -> Dict[str, List[str]]:
+        """
+        Get column names from each dependency's features.
+        
+        Args:
+            dataset: Dataset identifier
+            dependencies: List of dependency module IDs
+        
+        Returns:
+            dict: {module_id: [column_names]}
+        """
+        result = {}
+        for dep in dependencies:
+            features = self.artifact_store.get_features(dataset, dep)
+            if features is not None:
+                result[dep] = list(features.columns)
+        return result

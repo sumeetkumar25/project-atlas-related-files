@@ -1,0 +1,275 @@
+"""
+Artifact Store - Central storage for module outputs with dataset awareness.
+"""
+
+from typing import Dict, Any, Optional
+from datetime import datetime
+import pandas as pd
+
+
+class ArtifactStore:
+    """
+    Central store for module artifacts, organized by dataset.
+    
+    Structure:
+        _artifacts[dataset][module_id] = {artifact_name: value}
+    
+    Every module must export:
+    - features: DataFrame of computed features
+    - statistics: DataFrame of statistics
+    - report: String report
+    - validation: Validation result
+    - metadata: Dict of metadata
+    """
+    
+    REQUIRED_ARTIFACTS = ["features", "statistics", "report", "validation"]
+    
+    def __init__(self):
+        self._artifacts: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._timestamps: Dict[str, Dict[str, str]] = {}
+        self._module_order: Dict[str, list] = {}
+    
+    def put(self, dataset: str, module_id: str, artifacts: Dict[str, Any]) -> None:
+        """
+        Store artifacts from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier (e.g., "15m", "1h", "4h")
+            module_id: Module identifier (e.g., "001")
+            artifacts: Dictionary with required keys
+        """
+        # Validate required artifacts
+        missing = [key for key in self.REQUIRED_ARTIFACTS if key not in artifacts]
+        if missing:
+            raise ValueError(
+                f"Module {module_id} on {dataset} missing required artifacts: {missing}\n"
+                f"Available: {list(artifacts.keys())}\n"
+                f"Required: {self.REQUIRED_ARTIFACTS}"
+            )
+        
+        # Initialize dataset if not exists
+        if dataset not in self._artifacts:
+            self._artifacts[dataset] = {}
+            self._timestamps[dataset] = {}
+            self._module_order[dataset] = []
+        
+        # Initialize module if not exists
+        if module_id not in self._artifacts[dataset]:
+            self._artifacts[dataset][module_id] = {}
+        
+        self._artifacts[dataset][module_id].update(artifacts)
+        self._timestamps[dataset][module_id] = datetime.now().isoformat()
+        
+        if module_id not in self._module_order[dataset]:
+            self._module_order[dataset].append(module_id)
+    
+    def get(self, dataset: str, module_id: str) -> Dict[str, Any]:
+        """
+        Get all artifacts from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            dict: Artifact name -> value
+        """
+        return self._artifacts.get(dataset, {}).get(module_id, {})
+    
+    def get_features(self, dataset: str, module_id: str) -> Optional[pd.DataFrame]:
+        """
+        Get features from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            DataFrame: Features or None
+        """
+        artifacts = self._artifacts.get(dataset, {}).get(module_id, {})
+        return artifacts.get("features")
+    
+    def get_statistics(self, dataset: str, module_id: str) -> Optional[pd.DataFrame]:
+        """
+        Get statistics from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            DataFrame: Statistics or None
+        """
+        artifacts = self._artifacts.get(dataset, {}).get(module_id, {})
+        return artifacts.get("statistics")
+    
+    def get_report(self, dataset: str, module_id: str) -> Optional[str]:
+        """
+        Get report from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            str: Report or None
+        """
+        artifacts = self._artifacts.get(dataset, {}).get(module_id, {})
+        return artifacts.get("report")
+    
+    def get_validation(self, dataset: str, module_id: str) -> Optional[Any]:
+        """
+        Get validation result from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            Validation result or None
+        """
+        artifacts = self._artifacts.get(dataset, {}).get(module_id, {})
+        return artifacts.get("validation")
+    
+    def has(self, dataset: str, module_id: str, artifact_name: str) -> bool:
+        """
+        Check if a module has a specific artifact for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+            artifact_name: Name of the artifact
+        
+        Returns:
+            bool: True if artifact exists
+        """
+        return (
+            dataset in self._artifacts
+            and module_id in self._artifacts[dataset]
+            and artifact_name in self._artifacts[dataset][module_id]
+        )
+    
+    def has_module(self, dataset: str, module_id: str) -> bool:
+        """
+        Check if a module has stored artifacts for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            bool: True if module has artifacts
+        """
+        return (
+            dataset in self._artifacts
+            and module_id in self._artifacts[dataset]
+        )
+    
+    def list_artifacts(self, dataset: str, module_id: str) -> list:
+        """
+        List all artifact names for a module and dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            list: Artifact names
+        """
+        return list(self._artifacts.get(dataset, {}).get(module_id, {}).keys())
+    
+    def list_modules(self, dataset: str) -> list:
+        """
+        List all modules that have stored artifacts for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+        
+        Returns:
+            list: Module IDs
+        """
+        return self._module_order.get(dataset, []).copy()
+    
+    def list_datasets(self) -> list:
+        """
+        List all datasets that have stored artifacts.
+        
+        Returns:
+            list: Dataset identifiers
+        """
+        return list(self._artifacts.keys())
+    
+    def get_timestamp(self, dataset: str, module_id: str) -> Optional[str]:
+        """
+        Get the timestamp when a module stored artifacts for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            str: ISO timestamp or None
+        """
+        return self._timestamps.get(dataset, {}).get(module_id)
+    
+    def clear(self) -> None:
+        """Clear all artifacts."""
+        self._artifacts.clear()
+        self._timestamps.clear()
+        self._module_order.clear()
+    
+    def clear_dataset(self, dataset: str) -> None:
+        """
+        Clear artifacts for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+        """
+        if dataset in self._artifacts:
+            del self._artifacts[dataset]
+        if dataset in self._timestamps:
+            del self._timestamps[dataset]
+        if dataset in self._module_order:
+            del self._module_order[dataset]
+    
+    def clear_module(self, dataset: str, module_id: str) -> None:
+        """
+        Clear artifacts for a specific module and dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        """
+        if dataset in self._artifacts and module_id in self._artifacts[dataset]:
+            del self._artifacts[dataset][module_id]
+        if dataset in self._timestamps and module_id in self._timestamps[dataset]:
+            del self._timestamps[dataset][module_id]
+        if dataset in self._module_order and module_id in self._module_order[dataset]:
+            self._module_order[dataset].remove(module_id)
+    
+    def summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of stored artifacts.
+        
+        Returns:
+            dict: Summary statistics
+        """
+        total_modules = 0
+        total_artifacts = 0
+        
+        for dataset, modules in self._artifacts.items():
+            total_modules += len(modules)
+            for artifacts in modules.values():
+                total_artifacts += len(artifacts)
+        
+        return {
+            'total_datasets': len(self._artifacts),
+            'total_modules': total_modules,
+            'total_artifacts': total_artifacts,
+            'datasets': list(self._artifacts.keys()),
+            'module_counts': {
+                dataset: len(modules)
+                for dataset, modules in self._artifacts.items()
+            }
+        }

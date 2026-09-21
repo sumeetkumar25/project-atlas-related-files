@@ -1,0 +1,713 @@
+"""
+Atlas Registry - The project's brain.
+Central registry for all modules with audit trails and fingerprinting.
+
+FIXED: Lifecycle transitions now persist correctly.
+Modules that complete research are properly tracked.
+"""
+
+import json
+from pathlib import Path
+from datetime import datetime
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any, Type
+
+from atlas.framework.protocol import ResearchProtocol, ModuleStatus
+from atlas.framework.metadata import DatasetDescriptor, DatasetFingerprint
+from atlas.core.logger import AtlasLogger
+
+# SINGLE SOURCE OF TRUTH for framework version
+FRAMEWORK_VERSION = "2.4.0"
+
+
+@dataclass
+class ModuleRegistration:
+    """Registration entry for a module."""
+    module_id: str
+    module_class: Type
+    metadata: Dict[str, Any]
+    registered_at: str = field(default_factory=lambda: str(datetime.now()))
+
+
+class AtlasRegistry:
+    """
+    Central registry for Project Atlas.
+    
+    Lifecycle: PLANNED → IN_PROGRESS → COMPLETED → VALIDATED → FROZEN → DEPRECATED → ARCHIVED
+    
+    FIXED: 
+    - Transitions now auto-advance through prerequisite states
+    - Module status persists correctly after research completion
+    - Inconsistent state (Planned + Completed simultaneously) no longer possible
+    - FROZEN → DEPRECATED → ARCHIVED transitions work correctly
+    - Transition reasons are preserved in audit trail
+    - Frozen fingerprint is generated correctly after transition to FROZEN
+    """
+    
+    def __init__(self, registry_dir: str = "atlas/framework/registry"):
+        self.registry_dir = Path(registry_dir)
+        self.registry_dir.mkdir(parents=True, exist_ok=True)
+        self.registry_file = self.registry_dir / "registry.json"
+        self.datasets_file = self.registry_dir / "datasets.json"
+        
+        self.logger = AtlasLogger("registry")
+        
+        self.modules: Dict[str, ResearchProtocol] = {}
+        self.datasets: Dict[str, DatasetDescriptor] = {}
+        self.fingerprints: Dict[str, dict] = {}
+        
+        # For module class registration
+        self._module_classes: Dict[str, Type] = {}
+        self._module_metadata: Dict[str, Dict[str, Any]] = {}
+        
+        self.framework_version = FRAMEWORK_VERSION
+        self.framework_created = "2026-07-03"
+        
+        self._load()
+    
+    def _load(self):
+        """Load registry from disk"""
+        if self.registry_file.exists():
+            try:
+                with open(self.registry_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                stored_version = data.get('framework_version', self.framework_version)
+                
+                if stored_version != self.framework_version:
+                    self.logger.info(
+                        f"Registry file v{stored_version} loaded into framework v{self.framework_version}"
+                    )
+                
+                loaded_count = 0
+                for module_data in data.get('modules', []):
+                    try:
+                        protocol = ResearchProtocol.from_dict(module_data)
+                        module_id = protocol.module_id
+                        self.modules[module_id] = protocol
+                        loaded_count += 1
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load module: {e}")
+                
+                if loaded_count > 0:
+                    module_ids = sorted(self.modules.keys())
+                    self.logger.info(f"Loaded {loaded_count} modules: {module_ids}")
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to load registry: {e}")
+        
+        if self.datasets_file.exists():
+            try:
+                with open(self.datasets_file, 'r', encoding='utf-8') as f:
+                    datasets_data = json.load(f)
+                
+                loaded_datasets = 0
+                for ds_id, ds_data in datasets_data.get('datasets', {}).items():
+                    try:
+                        self.datasets[ds_id] = DatasetDescriptor.from_dict(ds_data)
+                        if 'fingerprint' in ds_data and ds_data['fingerprint']:
+                            self.fingerprints[ds_id] = ds_data['fingerprint']
+                        loaded_datasets += 1
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load dataset {ds_id}: {e}")
+                
+                if loaded_datasets > 0:
+                    self.logger.info(f"Loaded {loaded_datasets} datasets")
+            except Exception as e:
+                self.logger.warning(f"Failed to load datasets: {e}")
+    
+    def _save(self):
+        """Save registry to disk"""
+        registry_data = {
+            "framework_version": self.framework_version,
+            "last_updated": datetime.now().isoformat(),
+            "total_modules": len(self.modules),
+            "modules": []
+        }
+        
+        for module_id in sorted(self.modules.keys()):
+            protocol = self.modules[module_id]
+            registry_data['modules'].append(protocol.to_dict())
+        
+        with open(self.registry_file, 'w', encoding='utf-8') as f:
+            json.dump(registry_data, f, indent=2, ensure_ascii=False)
+        
+        datasets_data = {
+            "last_updated": datetime.now().isoformat(),
+            "total_datasets": len(self.datasets),
+            "datasets": {}
+        }
+        
+        for ds_id, descriptor in self.datasets.items():
+            ds_dict = descriptor.to_dict()
+            if ds_id in self.fingerprints:
+                ds_dict['fingerprint'] = self.fingerprints[ds_id]
+            datasets_data['datasets'][ds_id] = ds_dict
+        
+        with open(self.datasets_file, 'w', encoding='utf-8') as f:
+            json.dump(datasets_data, f, indent=2, ensure_ascii=False)
+    
+    # ============ Module Class Registration (for ModuleLoader) ============
+    
+    def register_module_class(
+        self,
+        module_class: Type,
+        module_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Register a module class for discovery.
+        
+        Args:
+            module_class: The module class to register
+            module_id: Optional module ID (defaults to metadata 'module' or class name)
+            metadata: Optional metadata dictionary
+        
+        Returns:
+            str: The module ID
+        """
+        if metadata is None:
+            metadata = {}
+        
+        if module_id is None:
+            module_id = metadata.get('module', module_class.__name__)
+        
+        self._module_classes[module_id] = module_class
+        self._module_metadata[module_id] = metadata
+        
+        return module_id
+    
+    def is_registered_class(self, module_class: Type) -> bool:
+        """
+        Check if a class is registered.
+        
+        Args:
+            module_class: The class to check
+        
+        Returns:
+            bool: True if registered
+        """
+        return module_class in self._module_classes.values()
+    
+    # Alias for backward compatibility
+    def is_registered(self, module_class: Type) -> bool:
+        """
+        Alias for is_registered_class.
+        
+        Args:
+            module_class: The class to check
+        
+        Returns:
+            bool: True if registered
+        """
+        return self.is_registered_class(module_class)
+    
+    def get_module_class(self, module_id: str) -> Optional[Type]:
+        """
+        Get a registered module class by ID.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            Module class or None
+        """
+        return self._module_classes.get(module_id)
+    
+    def get_module_metadata(self, module_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get registered module metadata.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            Metadata dict or None
+        """
+        return self._module_metadata.get(module_id)
+    
+    def list_registered_classes(self) -> Dict[str, Type]:
+        """
+        List all registered module classes.
+        
+        Returns:
+            dict: {module_id: module_class}
+        """
+        return self._module_classes.copy()
+    
+    # ============ Original Registry Methods ============
+    
+    def register_module(self, protocol: ResearchProtocol) -> None:
+        """Register a new research module"""
+        module_id = protocol.module_id
+        
+        if module_id in self.modules:
+            self.logger.info(f"Updating existing module: {module_id}")
+        else:
+            self.logger.success(f"Registered module: {module_id} - {protocol.module_name}")
+        
+        self.modules[module_id] = protocol
+        self._save()
+    
+    def _advance_to_state(
+        self,
+        module_id: str,
+        target: ModuleStatus,
+        reason: str = ""
+    ) -> bool:
+        """
+        Auto-advance through prerequisite states to reach target.
+        
+        This ensures modules don't get stuck in inconsistent states.
+        For example, if a module is PLANNED and needs to reach COMPLETED,
+        it will automatically transition through IN_PROGRESS first.
+        """
+        module = self.modules[module_id]
+        current = module.status
+        
+        # ---------------------------------------------------------
+        # Deprecation / archival lifecycle
+        # ---------------------------------------------------------
+        if current == ModuleStatus.FROZEN:
+            if target == ModuleStatus.DEPRECATED:
+                module.transition_to(
+                    ModuleStatus.DEPRECATED,
+                    reason=reason or "Module deprecated"
+                )
+                self._log_transition(module_id, module)
+                self._save()
+                return True
+
+            if target == ModuleStatus.ARCHIVED:
+                module.transition_to(
+                    ModuleStatus.DEPRECATED,
+                    reason="Auto-transition before archival"
+                )
+                self._log_transition(module_id, module)
+
+                module.transition_to(
+                    ModuleStatus.ARCHIVED,
+                    reason=reason or "Module archived"
+                )
+                self._log_transition(module_id, module)
+
+                self._save()
+                return True
+        
+        # Define the required path for research lifecycle
+        state_order = [
+            ModuleStatus.PLANNED,
+            ModuleStatus.IN_PROGRESS,
+            ModuleStatus.COMPLETED,
+            ModuleStatus.VALIDATED,
+            ModuleStatus.FROZEN
+        ]
+        
+        try:
+            current_idx = state_order.index(current)
+            target_idx = state_order.index(target)
+        except ValueError:
+            return False
+        
+        if target_idx <= current_idx:
+            # Already at or past target
+            return True
+        
+        # Advance through each intermediate state
+        for idx in range(current_idx + 1, target_idx + 1):
+            next_state = state_order[idx]
+            
+            try:
+                reasons = {
+                    ModuleStatus.IN_PROGRESS: "Research execution started",
+                    ModuleStatus.COMPLETED: "All datasets processed successfully",
+                    ModuleStatus.VALIDATED: "Results independently verified",
+                    ModuleStatus.FROZEN: "Module frozen - immutable"
+                }
+                
+                # Use the final reason only for the target state
+                if next_state == target and reason:
+                    transition_reason = reason
+                else:
+                    transition_reason = reasons.get(next_state, f"Auto-transition to {next_state.value}")
+                
+                module.transition_to(next_state, reason=transition_reason)
+                self._log_transition(module_id, module)
+                
+            except ValueError as e:
+                self.logger.error(f"Cannot advance {module_id} to {next_state.value}: {e}")
+                return False
+        
+        self._save()
+        return True
+    
+    def transition_module(self, module_id: str, new_status: ModuleStatus, 
+                         reason: str = "") -> bool:
+        """
+        Transition module with auto-advancement.
+        
+        Args:
+            module_id: Module identifier
+            new_status: Target status
+            reason: Optional reason for the transition
+        
+        Returns:
+            bool: True if transition succeeded
+        """
+        if module_id not in self.modules:
+            self.logger.error(f"Module {module_id} not found")
+            return False
+        
+        return self._advance_to_state(module_id, new_status, reason=reason)
+    
+    def _log_transition(self, module_id: str, module: ResearchProtocol):
+        """Log status transition"""
+        history = module.status_history
+        if len(history) >= 2:
+            last = history[-1]
+            icon = self._status_icon(module.status)
+            self.logger.success(
+                f"Module {module_id}: {last['from']} → {last['to']} {icon}"
+            )
+            if last.get('reason'):
+                self.logger.info(f"  Reason: {last['reason']}")
+    
+    def _status_icon(self, status: ModuleStatus) -> str:
+        """Get icon for status"""
+        icons = {
+            ModuleStatus.PLANNED: "○",
+            ModuleStatus.IN_PROGRESS: "◉",
+            ModuleStatus.COMPLETED: "✓",
+            ModuleStatus.VALIDATED: "✔",
+            ModuleStatus.FROZEN: "❄",
+            ModuleStatus.DEPRECATED: "☠",
+            ModuleStatus.ARCHIVED: "📦"
+        }
+        return icons.get(status, "?")
+    
+    def start_module(self, module_id: str) -> bool:
+        """Mark module as In Progress (auto-advances from Planned)"""
+        return self.transition_module(module_id, ModuleStatus.IN_PROGRESS)
+    
+    def complete_module(self, module_id: str) -> bool:
+        """Mark module as Completed (auto-advances through In Progress)"""
+        return self.transition_module(module_id, ModuleStatus.COMPLETED)
+    
+    def validate_module(self, module_id: str, validation_source: str = "") -> bool:
+        """Validate module (auto-advances through In Progress and Completed)"""
+        if module_id not in self.modules:
+            self.logger.error(f"Module {module_id} not found")
+            return False
+        
+        # Auto-advance to COMPLETED first
+        if not self._advance_to_state(module_id, ModuleStatus.COMPLETED):
+            return False
+        
+        module = self.modules[module_id]
+        module.create_fingerprint(source_path=validation_source)
+        
+        return self.transition_module(module_id, ModuleStatus.VALIDATED)
+    
+    def freeze_module(self, module_id: str, module_source_path: str = "") -> bool:
+        """
+        Freeze module (auto-advances through all prerequisite states).
+        
+        FIXED: 
+        - Now correctly transitions to FROZEN first, then generates fingerprint.
+        - Logs warning if source_path is empty.
+        
+        Args:
+            module_id: Module identifier
+            module_source_path: Path to module source file
+        
+        Returns:
+            bool: True if freeze succeeded
+        """
+        if module_id not in self.modules:
+            self.logger.error(f"Module {module_id} not found")
+            return False
+
+        module = self.modules[module_id]
+
+        # ---------------------------------------------------------
+        # Check dependencies
+        # ---------------------------------------------------------
+        for dep_id in module.depends_on:
+            if dep_id in self.modules:
+                if self.modules[dep_id].status != ModuleStatus.FROZEN:
+                    self.logger.error(
+                        f"Cannot freeze {module_id}: "
+                        f"dependency {dep_id} not frozen"
+                    )
+                    return False
+
+        # ---------------------------------------------------------
+        # Reach VALIDATED state
+        # ---------------------------------------------------------
+        if not self._advance_to_state(module_id, ModuleStatus.VALIDATED):
+            return False
+
+        module = self.modules[module_id]
+
+        validation_data = (
+            f"{module.module_id}"
+            f"{module.version}"
+            f"{module.validation_date}"
+        )
+
+        # ---------------------------------------------------------
+        # Move to FROZEN first
+        # ---------------------------------------------------------
+        if not self.transition_module(
+            module_id,
+            ModuleStatus.FROZEN,
+            reason="Module frozen - immutable"
+        ):
+            return False
+
+        # ---------------------------------------------------------
+        # Now generate frozen fingerprint
+        # ---------------------------------------------------------
+        module = self.modules[module_id]
+
+        # Warn if source_path is empty
+        if not module_source_path:
+            self.logger.warning(
+                f"Module {module_id} frozen without source path; "
+                "source_hash will be empty"
+            )
+
+        module.create_fingerprint(
+            source_path=module_source_path,
+            validation_data=validation_data
+        )
+
+        if module.fingerprint:
+            module.fingerprint["frozen_at"] = datetime.now().isoformat()
+
+        self._save()
+        return True
+    
+    def verify_module_integrity(self, module_id: str, source_path: str = "") -> bool:
+        """Verify a module hasn't been tampered with"""
+        if module_id not in self.modules:
+            return False
+        
+        module = self.modules[module_id]
+        if not module.fingerprint:
+            self.logger.warning(f"Module {module_id} has no fingerprint")
+            return False
+        
+        is_valid = module.verify_fingerprint(source_path)
+        
+        if is_valid:
+            self.logger.success(f"Module {module_id} integrity VERIFIED ✓")
+        else:
+            self.logger.error(f"Module {module_id} integrity FAILED ✗")
+        
+        return is_valid
+    
+    def get_module_audit_trail(self, module_id: str) -> Optional[str]:
+        """Get complete audit trail"""
+        if module_id not in self.modules:
+            return None
+        return self.modules[module_id].get_audit_trail()
+    
+    def register_dataset(self, dataset_id: str, descriptor: DatasetDescriptor,
+                         fingerprint: Optional[dict] = None) -> None:
+        """Register a dataset"""
+        self.datasets[dataset_id] = descriptor
+        if fingerprint:
+            self.fingerprints[dataset_id] = fingerprint
+            descriptor.fingerprint = fingerprint.get('sha256', '')
+        self.logger.success(f"Registered dataset: {dataset_id} ({descriptor.rows:,} rows)")
+        self._save()
+    
+    def get_module(self, module_id: str) -> Optional[ResearchProtocol]:
+        """Get a module's protocol"""
+        return self.modules.get(module_id)
+    
+    def get_dependencies(self, module_id: str) -> List[str]:
+        """Get all dependencies recursively"""
+        if module_id not in self.modules:
+            return []
+        deps = []
+        visited = set()
+        to_process = list(self.modules[module_id].depends_on)
+        while to_process:
+            dep_id = to_process.pop(0)
+            if dep_id not in visited:
+                visited.add(dep_id)
+                if dep_id in self.modules:
+                    deps.append(dep_id)
+                    for sub_dep in self.modules[dep_id].depends_on:
+                        if sub_dep not in visited and sub_dep not in to_process:
+                            to_process.append(sub_dep)
+        return deps
+    
+    def get_dependent_modules(self, module_id: str) -> List[str]:
+        """Get modules that depend on this module"""
+        return [mid for mid, proto in self.modules.items() if module_id in proto.depends_on]
+    
+    def get_dataset(self, dataset_id: str) -> Optional[DatasetDescriptor]:
+        """Get dataset descriptor"""
+        return self.datasets.get(dataset_id)
+    
+    def verify_dataset(self, dataset_id: str, filepath: str) -> bool:
+        """Verify dataset integrity"""
+        if dataset_id not in self.fingerprints:
+            return False
+        stored_hash = self.fingerprints[dataset_id].get('sha256')
+        if not stored_hash:
+            return False
+        is_valid = DatasetFingerprint.verify_fingerprint(filepath, stored_hash)
+        if is_valid:
+            self.logger.success(f"Dataset {dataset_id} verified")
+        else:
+            self.logger.error(f"Dataset {dataset_id} FAILED verification")
+        return is_valid
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get registry statistics (backward-compatible)"""
+        status_counts = {}
+        for status in ModuleStatus:
+            count = sum(1 for m in self.modules.values() if m.status == status)
+            key = status.value.lower().replace(" ", "_")
+            status_counts[key] = count
+        
+        validated_count = sum(1 for m in self.modules.values() if m.validated)
+        fingerprinted_count = sum(1 for m in self.modules.values() if m.fingerprint)
+        
+        stats = {
+            "total_modules": len(self.modules),
+            "total_datasets": len(self.datasets),
+            "framework_version": self.framework_version,
+            **status_counts,
+            "validated_modules": validated_count,
+            "fingerprinted_modules": fingerprinted_count,
+        }
+        
+        # Backward-compatible keys
+        stats.update({
+            "planned_modules": status_counts.get("planned", 0),
+            "in_progress_modules": status_counts.get("in_progress", 0),
+            "completed_modules": status_counts.get("completed", 0),
+            "frozen_modules": status_counts.get("frozen", 0),
+        })
+        
+        return stats
+    
+    def list_modules(self, status_filter: Optional[ModuleStatus] = None) -> List[Dict]:
+        """List all registered modules"""
+        modules_list = []
+        for module_id, protocol in sorted(self.modules.items()):
+            if status_filter and protocol.status != status_filter:
+                continue
+            modules_list.append({
+                'id': module_id,
+                'name': protocol.module_name,
+                'status': protocol.status.value,
+                'version': protocol.version,
+                'depends_on': protocol.depends_on,
+                'validated': protocol.validated,
+                'category': protocol.category.value,
+                'produces': protocol.produces,
+                'fingerprinted': bool(protocol.fingerprint),
+                'audit_entries': len(protocol.status_history)
+            })
+        return modules_list
+    
+    def _get_all_dependency_ids(self) -> set:
+        """Get all dependency IDs"""
+        all_deps = set()
+        for protocol in self.modules.values():
+            all_deps.update(protocol.depends_on)
+        return all_deps
+    
+    def generate_registry_report(self) -> str:
+        """Generate comprehensive registry report"""
+        stats = self.get_statistics()
+        
+        lines = []
+        lines.append("=" * 70)
+        lines.append("ATLAS REGISTRY REPORT")
+        lines.append("=" * 70)
+        lines.append(f"\nFramework Version: {stats['framework_version']}")
+        lines.append(f"Total Modules: {stats['total_modules']}")
+        lines.append(f"Total Datasets: {stats['total_datasets']}")
+        
+        # Module status summary
+        lines.append("\n" + "-" * 70)
+        lines.append("MODULE STATUS SUMMARY")
+        lines.append("-" * 70)
+        
+        for status in ModuleStatus:
+            key = status.value.lower().replace(" ", "_")
+            count = stats.get(key, 0)
+            if count > 0:
+                lines.append(f"  {self._status_icon(status)} {status.value}: {count}")
+        
+        if stats.get('fingerprinted_modules', 0) > 0:
+            lines.append(f"\n  🔐 Fingerprinted: {stats['fingerprinted_modules']}")
+        
+        # Module listing with current status
+        lines.append("\n" + "-" * 70)
+        lines.append("REGISTERED MODULES")
+        lines.append("-" * 70)
+        
+        for module_id in sorted(self.modules.keys()):
+            protocol = self.modules[module_id]
+            icon = self._status_icon(protocol.status)
+            deps = f" → depends on [{', '.join(protocol.depends_on)}]" if protocol.depends_on else ""
+            lines.append(f"  {icon} {module_id}: {protocol.module_name} [{protocol.status.value}]{deps}")
+        
+        # Missing dependencies
+        registered_ids = set(self.modules.keys())
+        all_deps = self._get_all_dependency_ids()
+        missing = all_deps - registered_ids
+        if missing:
+            lines.append(f"\n  ⚠ MISSING DEPENDENCIES:")
+            for dep_id in sorted(missing):
+                needing = [mid for mid, p in self.modules.items() if dep_id in p.depends_on]
+                lines.append(f"    {dep_id} (required by: {', '.join(needing)})")
+        
+        # Dataset inventory
+        lines.append("\n" + "-" * 70)
+        lines.append("DATASET INVENTORY")
+        lines.append("-" * 70)
+        
+        if self.datasets:
+            for ds_id, descriptor in self.datasets.items():
+                has_fp = "🔒" if ds_id in self.fingerprints else "⚠"
+                lines.append(f"\n{has_fp} {ds_id}")
+                lines.append(f"  {descriptor.summary()}")
+        else:
+            lines.append("\n  No datasets registered yet")
+        
+        # Recent audit activity
+        lines.append("\n" + "-" * 70)
+        lines.append("RECENT AUDIT ACTIVITY")
+        lines.append("-" * 70)
+        
+        all_transitions = []
+        for mid, proto in self.modules.items():
+            for entry in proto.status_history:
+                all_transitions.append({
+                    'module': mid,
+                    'timestamp': entry['timestamp'],
+                    'transition': f"{entry['from']} → {entry['to']}",
+                    'reason': entry.get('reason', '')
+                })
+        
+        if all_transitions:
+            all_transitions.sort(key=lambda x: x['timestamp'], reverse=True)
+            for t in all_transitions[:10]:
+                ts = t['timestamp'][:19]
+                lines.append(f"  [{ts}] {t['module']}: {t['transition']}")
+                if t['reason']:
+                    lines.append(f"         {t['reason']}")
+        else:
+            lines.append("\n  No audit activity yet")
+        
+        lines.append("\n" + "=" * 70)
+        return "\n".join(lines)

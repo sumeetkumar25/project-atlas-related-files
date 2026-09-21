@@ -1,0 +1,165 @@
+"""
+Feature Store - Central storage for computed features.
+Enables dependency injection of feature DataFrames between modules.
+"""
+
+import pandas as pd
+from typing import Dict, Any, Optional, List
+from datetime import datetime
+
+
+class FeatureStore:
+    """
+    Central store for computed features from dependency modules.
+    
+    Each module stores its feature outputs here, and dependent modules
+    receive a combined feature DataFrame automatically.
+    """
+    
+    def __init__(self):
+        self._features: Dict[str, pd.DataFrame] = {}
+        self._metadata: Dict[str, Dict[str, Any]] = {}
+        self._timestamps: Dict[str, str] = {}
+        self._source_order: List[str] = []
+    
+    def put(self, module_id: str, features: pd.DataFrame, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Store features from a module.
+        
+        Args:
+            module_id: Module identifier (e.g., "005")
+            features: DataFrame containing the features
+            metadata: Optional metadata about the features
+        """
+        self._features[module_id] = features
+        self._timestamps[module_id] = datetime.now().isoformat()
+        self._metadata[module_id] = metadata or {}
+        
+        if module_id not in self._source_order:
+            self._source_order.append(module_id)
+    
+    def get(self, module_id: str) -> Optional[pd.DataFrame]:
+        """
+        Get features from a specific module.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            DataFrame or None if not found
+        """
+        return self._features.get(module_id)
+    
+    def get_all(self) -> Dict[str, pd.DataFrame]:
+        """
+        Get all stored features.
+        
+        Returns:
+            dict: {module_id: DataFrame}
+        """
+        return self._features.copy()
+    
+    def get_combined(self, module_ids: Optional[List[str]] = None) -> pd.DataFrame:
+        """
+        Get a combined DataFrame of features from multiple modules.
+        
+        Args:
+            module_ids: List of module IDs to combine (None = all)
+        
+        Returns:
+            DataFrame with all features combined
+        """
+        if module_ids is None:
+            module_ids = self._source_order
+        
+        combined = pd.DataFrame()
+        
+        for module_id in module_ids:
+            if module_id in self._features:
+                df = self._features[module_id]
+                # Prefix columns with module ID to avoid conflicts
+                if len(module_ids) > 1:
+                    for col in df.columns:
+                        combined[f"{module_id}_{col}"] = df[col]
+                else:
+                    combined = df.copy()
+        
+        return combined
+    
+    def get_feature_names(self, module_id: str) -> List[str]:
+        """
+        Get feature names from a module.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            list: Feature column names
+        """
+        df = self._features.get(module_id)
+        if df is not None:
+            return list(df.columns)
+        return []
+    
+    def has(self, module_id: str) -> bool:
+        """
+        Check if a module has stored features.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            bool: True if features exist
+        """
+        return module_id in self._features
+    
+    def list_modules(self) -> List[str]:
+        """
+        List all modules that have stored features.
+        
+        Returns:
+            list: Module IDs
+        """
+        return self._source_order.copy()
+    
+    def clear(self) -> None:
+        """Clear all stored features."""
+        self._features.clear()
+        self._metadata.clear()
+        self._timestamps.clear()
+        self._source_order.clear()
+    
+    def clear_module(self, module_id: str) -> None:
+        """
+        Clear features for a specific module.
+        
+        Args:
+            module_id: Module identifier
+        """
+        if module_id in self._features:
+            del self._features[module_id]
+        if module_id in self._metadata:
+            del self._metadata[module_id]
+        if module_id in self._timestamps:
+            del self._timestamps[module_id]
+        if module_id in self._source_order:
+            self._source_order.remove(module_id)
+    
+    def summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of stored features.
+        
+        Returns:
+            dict: Summary statistics
+        """
+        total_features = sum(len(df.columns) for df in self._features.values())
+        
+        return {
+            'total_modules': len(self._features),
+            'total_features': total_features,
+            'modules': self._source_order,
+            'feature_counts': {
+                module_id: len(df.columns)
+                for module_id, df in self._features.items()
+            }
+        }

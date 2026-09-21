@@ -1,0 +1,1526 @@
+{
+  "framework_version": "2.4.0",
+  "last_updated": "2026-08-13T12:17:41.603205",
+  "total_modules": 21,
+  "modules": [
+    {
+      "module_id": "001",
+      "module_name": "Return Distribution Analysis",
+      "category": "Distribution Analysis",
+      "question": "What are the statistical properties of returns for this timeframe?",
+      "hypothesis": "Returns may exhibit non-normal distribution characteristics with fat tails.",
+      "rationale": "Understanding return distributions is foundational for all subsequent analysis. Distribution properties affect volatility modeling, risk assessment, and strategy design.",
+      "methodology": "1. Calculate log returns from close prices\n2. Compute descriptive statistics (moments, percentiles)\n3. Test for normality using multiple statistical tests\n4. Analyze tail behavior using threshold method\n5. Measure autocorrelation structure",
+      "statistics": [
+        "Log returns",
+        "Descriptive statistics (mean, std, skewness, kurtosis)",
+        "Normality tests (Shapiro-Wilk, Jarque-Bera, KS)",
+        "Tail metrics (threshold=2σ)",
+        "Autocorrelation (lags 1,5,10,20,50)",
+        "Ljung-Box test"
+      ],
+      "depends_on": [
+        "000"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-03",
+      "status": "Validated",
+      "validated": true,
+      "validation_date": "2026-07-04",
+      "completion_date": "2026-07-04",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-04T13:00:58.930175",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-04T13:01:00.100145",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-04T13:01:08.132628",
+          "reason": "Research execution finished"
+        },
+        {
+          "from": "Completed",
+          "to": "In Progress",
+          "timestamp": "2026-07-04T13:01:08.429094",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-04T13:01:09.944901",
+          "reason": "Research execution finished"
+        },
+        {
+          "from": "Completed",
+          "to": "In Progress",
+          "timestamp": "2026-07-04T13:01:10.033121",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-04T13:01:10.242914",
+          "reason": "Research execution finished"
+        },
+        {
+          "from": "Completed",
+          "to": "Validated",
+          "timestamp": "2026-07-04T13:01:10.335619",
+          "reason": "Results independently verified"
+        },
+        {
+          "from": "Validated",
+          "to": "In Progress",
+          "timestamp": "2026-07-04T13:08:24.068918",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-04T13:08:35.445215",
+          "reason": "All datasets processed successfully"
+        },
+        {
+          "from": "Completed",
+          "to": "Validated",
+          "timestamp": "2026-07-04T13:08:35.491599",
+          "reason": "Results independently verified"
+        }
+      ],
+      "fingerprint": {
+        "module_id": "001",
+        "version": "1.0.0",
+        "created_at": "2026-07-04T13:08:35.491599",
+        "source_hash": "ee5e9a87026b72486f60374a8b0cf3542259490e8e3364ac3d05340b6627dd75",
+        "protocol_hash": "220fa2a0ec9816fbea348a8c747bc5034a8d3c66b4032555d788dae33e28be8d",
+        "validation_hash": "",
+        "frozen_hash": ""
+      },
+      "limitations": [
+        "Analysis limited to available data period",
+        "Results may vary with different market regimes",
+        "Distribution characteristics may be time-varying"
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Cross-timeframe distribution comparison",
+        "Time-varying distribution parameters",
+        "Regime-specific distributions"
+      ],
+      "references": [],
+      "produces": []
+    },
+    {
+      "module_id": "002",
+      "module_name": "Volatility Persistence Analysis",
+      "category": "Volatility Analysis",
+      "question": "Is BTC volatility independent through time?",
+      "hypothesis": "H0: Volatility is independent through time. H1: Volatility exhibits persistence and clustering behavior.",
+      "rationale": "Volatility persistence affects position sizing, risk management, and forecasting horizon. Understanding volatility dynamics is essential for building robust trading strategies.",
+      "methodology": "Phase 1: Core Calculations\n1. Calculate log returns from close prices\n2. Compute absolute returns |r|\n3. Compute squared returns r²\n4. Calculate rolling volatility for windows [10, 20, 50, 100]\nPhase 2: Regime Engine (percentile-based classification)\nPhase 3: Transition Matrix (Markov chain estimation)\nPhase 4: Persistence Metrics (regime duration analysis)\nPhase 5: Exports and Validation",
+      "statistics": [
+        "Log returns (from Module001)",
+        "Absolute returns |r|",
+        "Squared returns r²",
+        "Rolling volatility (10, 20, 50, 100 periods)",
+        "Volatility descriptive statistics per window"
+      ],
+      "depends_on": [
+        "000",
+        "001"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-phase1",
+      "created_date": "2026-07-04",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-05",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-04T13:32:23.976636",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-04T13:42:00.961152",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-04T13:42:05.695834",
+          "reason": "All datasets processed successfully"
+        },
+        {
+          "from": "Completed",
+          "to": "In Progress",
+          "timestamp": "2026-07-04T21:15:50.086456",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-04T21:15:56.992797",
+          "reason": "All datasets processed successfully"
+        },
+        {
+          "from": "Completed",
+          "to": "In Progress",
+          "timestamp": "2026-07-04T21:22:43.448334",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-04T21:22:49.677418",
+          "reason": "All datasets processed successfully"
+        },
+        {
+          "from": "Completed",
+          "to": "In Progress",
+          "timestamp": "2026-07-04T22:17:07.360311",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-04T22:17:43.594005",
+          "reason": "All datasets processed successfully"
+        },
+        {
+          "from": "Completed",
+          "to": "In Progress",
+          "timestamp": "2026-07-04T22:24:53.518170",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-04T22:25:23.988892",
+          "reason": "All datasets processed successfully"
+        },
+        {
+          "from": "Completed",
+          "to": "In Progress",
+          "timestamp": "2026-07-05T00:05:20.557090",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-05T00:05:49.558372",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Phase 1: Core calculations only - no regime analysis yet",
+        "Rolling windows are fixed [10, 20, 50, 100]",
+        "Results depend on data quality verified in Module000"
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Phase 2: Regime classification",
+        "Phase 3: Transition matrix estimation",
+        "Phase 4: Persistence metrics",
+        "Volatility forecasting models"
+      ],
+      "references": [],
+      "produces": [
+        "volatility_dataframe",
+        "rolling_volatility_series"
+      ]
+    },
+    {
+      "module_id": "003",
+      "module_name": "Return Dependency Analysis",
+      "category": "Correlation Analysis",
+      "question": "Do BTC returns exhibit linear dependence?",
+      "hypothesis": "H0: Returns are independent through time. H1: Returns exhibit linear dependence (autocorrelation).",
+      "rationale": "Return dependency affects market efficiency assessment, trading strategy design, and risk model calibration. If returns are predictable from past returns, this violates the weak form of market efficiency.",
+      "methodology": "Phase 1: Autocorrelation Analysis\n1. Calculate log returns from close prices\n2. Compute ACF for lags 1-100\n3. Test significance using Bartlett's formula\n4. Identify strongest dependencies\n5. Compare significant lags to expected false positives",
+      "statistics": [
+        "Log returns",
+        "ACF values (lags 1-100)",
+        "Significant lags count",
+        "Strongest autocorrelation (lag and value)",
+        "Confidence bounds"
+      ],
+      "depends_on": [
+        "000",
+        "001"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-phase1",
+      "created_date": "2026-07-05",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-05",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-05T00:29:20.638921",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-05T00:41:35.998865",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-05T00:41:38.592657",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [],
+      "conclusions": [],
+      "future_research": [],
+      "references": [],
+      "produces": [
+        "autocorrelation_function",
+        "significant_lags"
+      ]
+    },
+    {
+      "module_id": "004",
+      "module_name": "Stationarity Analysis",
+      "category": "Validation",
+      "question": "Are BTC returns statistically stationary?",
+      "hypothesis": "Returns contain a unit root (non-stationary).",
+      "rationale": "Stationarity is a fundamental assumption in time series analysis. Non-stationary data can produce spurious correlations and unreliable statistical inference. Before any time series modeling, we must confirm that BTC returns are stationary.",
+      "methodology": "Phase 1: Stationarity Tests\n1. Calculate log returns from close prices\n2. Augmented Dickey-Fuller (ADF) test\n   - H0: Unit root present (non-stationary)\n   - H1: No unit root (stationary)\n   - Reject H0 if p-value < 0.05\n3. KPSS test\n   - H0: Series is stationary\n   - H1: Unit root present (non-stationary)\n   - Reject H0 if p-value < 0.05\n4. Rolling mean analysis\n   - Windows: [50, 100, 250, 500]\n   - Stationary series should have constant mean\n5. Rolling variance analysis\n   - Windows: [50, 100, 250, 500]\n   - Stationary series may still have variance clustering\n\nUsing both ADF and KPSS together provides a stronger conclusion:\n- ADF rejects unit root + KPSS fails to reject stationarity = stationary\n- ADF fails to reject + KPSS rejects stationarity = non-stationary\n- Both reject = inconclusive (may need differencing)\n- Both fail to reject = insufficient evidence",
+      "statistics": [
+        "ADF Statistic",
+        "ADF p-value",
+        "ADF critical values (1%, 5%, 10%)",
+        "ADF used lags",
+        "KPSS Statistic",
+        "KPSS p-value",
+        "KPSS used lags",
+        "Rolling Mean (windows: 50, 100, 250, 500)",
+        "Rolling Variance (windows: 50, 100, 250, 500)"
+      ],
+      "depends_on": [
+        "000",
+        "001"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-phase1",
+      "created_date": "2026-07-05",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-05",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-05T11:06:04.577432",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-05T11:45:28.942305",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-05T11:46:30.290757",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [],
+      "conclusions": [],
+      "future_research": [],
+      "references": [],
+      "produces": [
+        "adf_results",
+        "kpss_results",
+        "rolling_mean",
+        "rolling_variance"
+      ]
+    },
+    {
+      "module_id": "005",
+      "module_name": "Trend Persistence",
+      "category": "Regime Detection",
+      "question": "How long do BTC trends statistically persist?",
+      "hypothesis": "Trend direction is independent from candle to candle.",
+      "rationale": "Understanding trend persistence is essential for momentum strategies, position holding periods, and market regime characterization. If trends persist longer than random chance, this indicates market inefficiency that can be exploited.",
+      "methodology": "Phase 1: Trend Segmentation\n1. Calculate log returns from close prices\n2. Determine trend direction (up/down/flat) for each candle\n3. Segment consecutive same-direction candles into trends\n4. Compute trend duration statistics\n5. Compare to expected durations under independence",
+      "statistics": [
+        "Number of up trends",
+        "Number of down trends",
+        "Total trend segments",
+        "Mean trend length",
+        "Median trend length",
+        "Maximum trend length",
+        "Trend length distribution"
+      ],
+      "depends_on": [
+        "000",
+        "001"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-phase1",
+      "created_date": "2026-07-05",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-05",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-05T12:17:41.930493",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-05T12:25:20.946444",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-05T12:25:26.853514",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [],
+      "conclusions": [],
+      "future_research": [],
+      "references": [],
+      "produces": [
+        "trend_segments",
+        "trend_summary"
+      ]
+    },
+    {
+      "module_id": "006",
+      "module_name": "Volatility Clustering",
+      "category": "Volatility Analysis",
+      "question": "Does BTC exhibit volatility clustering?",
+      "hypothesis": "Volatility is randomly distributed through time.",
+      "rationale": "Volatility clustering is one of the most well-documented stylized facts in financial time series. Large price changes tend to be followed by large price changes, and small changes by small changes. This has profound implications for risk management and option pricing.",
+      "methodology": "Phase 1: Volatility Measurement\n1. Calculate log returns\n2. Compute volatility proxies (absolute returns, squared returns)\n3. Calculate rolling volatility for multiple windows\n4. Summary statistics\nPhase 2: Clustering Tests (future)\n- Autocorrelation of volatility proxies\n- Ljung-Box on squared returns\n- ARCH effects testing",
+      "statistics": [
+        "return_count",
+        "return_std",
+        "mean_abs_return",
+        "mean_squared_return",
+        "max_abs_return",
+        "rolling_volatility"
+      ],
+      "depends_on": [
+        "000",
+        "001"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-19",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-19",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-19T00:04:16.503957",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-19T00:04:16.842931",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-19T00:04:20.356926",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [],
+      "conclusions": [],
+      "future_research": [],
+      "references": [],
+      "produces": [
+        "volatility_series",
+        "rolling_volatility"
+      ]
+    },
+    {
+      "module_id": "007",
+      "module_name": "Pullback Statistics",
+      "category": "Market Microstructure",
+      "question": "How do pullbacks behave after an established trend?",
+      "hypothesis": "Pullbacks occur randomly with no stable statistical properties.",
+      "rationale": "Understanding pullback behaviour is essential for trend-following strategies. If pullbacks have predictable depth and duration, entries can be optimized. Module 007 builds on Module 005's trend segmentation to analyze what happens after a trend ends - without redefining what a trend is.",
+      "methodology": "Phase 1: Pullback Detection and Measurement\n1. Load trend segments from Module 005 output\n2. For each trend, identify the first pullback after trend end\n3. Measure pullback depth (%), duration (bars), and recovery\n4. Compute summary statistics across all pullbacks\n\nDesign principle: Module 007 does NOT redefine trends.\nIt consumes Module 005's output as ground truth.",
+      "statistics": [
+        "pullback_count",
+        "mean_depth_pct",
+        "median_depth_pct",
+        "max_depth_pct",
+        "mean_duration",
+        "median_duration",
+        "recovery_rate"
+      ],
+      "depends_on": [
+        "000",
+        "001",
+        "005"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-06",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-06",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-06T00:38:03.875051",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-06T00:48:01.353440",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-06T00:48:27.256572",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [],
+      "conclusions": [],
+      "future_research": [],
+      "references": [],
+      "produces": [
+        "pullbacks",
+        "pullback_statistics"
+      ]
+    },
+    {
+      "module_id": "008",
+      "module_name": "Trend Continuation Probability",
+      "category": "Regime Detection",
+      "question": "After a pullback has occurred, what is the empirical probability that the original trend resumes versus reverses?",
+      "hypothesis": "Continuation probability equals reversal probability (50/50).",
+      "rationale": "Trend continuation probability is the core metric for trend-following strategies. If pullbacks are typically followed by trend resumption, pullbacks represent entry opportunities. If reversals dominate, pullbacks should be treated as exit signals.",
+      "methodology": "Phase 1: Continuation Probability Measurement\n1. Load pullback events from Module 007\n2. For each pullback, look ahead 100 bars\n3. Classify outcome: Continuation, Reversal, or Undecided\n4. Compute overall continuation/reversal rates\n5. Stratify by pullback depth and duration\n\nArchitecture: Module 005 → Module 007 → Module 008",
+      "statistics": [
+        "continuation_rate",
+        "reversal_rate",
+        "undecided_rate",
+        "continuation_by_depth",
+        "continuation_by_duration"
+      ],
+      "depends_on": [
+        "000",
+        "001",
+        "005",
+        "007"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-06",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-06",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-06T16:15:32.542255",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-06T16:15:32.980230",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-06T16:16:13.941643",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [],
+      "conclusions": [],
+      "future_research": [],
+      "references": [],
+      "produces": [
+        "continuation_events",
+        "depth_probability"
+      ]
+    },
+    {
+      "module_id": "009",
+      "module_name": "Maximum Favorable Excursion",
+      "category": "Validation",
+      "question": "After a pullback entry, how much favorable excursion (profit potential) and adverse excursion (risk) does each trade experience?",
+      "hypothesis": "MFE and MAE are symmetric (no edge in either direction).",
+      "rationale": "MFE/MAE analysis is the standard professional method for evaluating trade quality. It answers: 'If I entered at the pullback end, what was the best and worst that could have happened?' This is more informative than binary continuation/reversal classification.",
+      "methodology": "Phase 1: MFE/MAE Measurement\n1. Load continuation events from Module 008\n2. For each event, look ahead 100 bars\n3. Compute MFE (max profit) and MAE (max drawdown)\n4. Calculate Reward/Risk ratio per trade\n5. Aggregate statistics and distributions",
+      "statistics": [
+        "mean_mfe",
+        "median_mfe",
+        "std_mfe",
+        "mean_mae",
+        "median_mae",
+        "std_mae",
+        "mean_rr",
+        "median_rr",
+        "p_mfe_gt_1",
+        "p_mfe_gt_2",
+        "p_mfe_gt_3",
+        "p_mfe_gt_5",
+        "p_mfe_gt_10"
+      ],
+      "depends_on": [
+        "001",
+        "005",
+        "007",
+        "008"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0",
+      "created_date": "2026-07-06",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-06",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-06T20:31:41.760817",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-06T20:31:42.744198",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-06T20:32:28.480946",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [],
+      "conclusions": [],
+      "future_research": [],
+      "references": [],
+      "produces": [
+        "excursion_events",
+        "reward_risk",
+        "mfe_distribution",
+        "mae_distribution"
+      ]
+    },
+    {
+      "module_id": "010",
+      "module_name": "Volatility Persistence",
+      "category": "Volatility Analysis",
+      "question": "Once BTC enters a high- or low-volatility state, how long does it remain there?",
+      "hypothesis": "Volatility clusters into persistent regimes. High-volatility periods and low-volatility periods exhibit significant duration beyond random chance.",
+      "rationale": "Persistent volatility environments influence subsequent market behavior, position sizing decisions, and risk management. Understanding regime duration is essential for adaptive trading strategies.",
+      "methodology": "Phase 1: Skeleton (this phase)\n  - Establish pipeline architecture\n  - Verify framework integration\n  - No calculations performed\n\nPhase 2: Core Calculations\n  - Calculate log returns\n  - Compute rolling realized volatility\n  - Classify volatility percentiles\n\nPhase 3: Regime Analysis\n  - Assign volatility states\n  - Detect regime segments\n  - Compute duration statistics\n\nPhase 4: Transition Analysis\n  - Build transition matrix\n  - Measure persistence probabilities\n  - Export all results",
+      "statistics": [
+        "Realized volatility",
+        "Volatility percentile",
+        "Regime classification",
+        "Regime duration (mean, median, max)",
+        "Transition probability matrix",
+        "Persistence probability per regime",
+        "Regime count distribution"
+      ],
+      "depends_on": [
+        "000"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-skeleton",
+      "created_date": "2026-07-07",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-07",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-07T13:47:33.632156",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-07T14:37:19.684397",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-07T14:37:21.842150",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Results depend on window size selection",
+        "Regime boundaries are percentile-based (relative, not absolute)",
+        "Does not forecast future volatility states"
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Multi-timeframe volatility comparison",
+        "Volatility forecasting models",
+        "Regime-conditional return distributions"
+      ],
+      "references": [],
+      "produces": [
+        "volatility_series",
+        "regime_assignments",
+        "regime_segments",
+        "transition_matrix",
+        "persistence_statistics"
+      ]
+    },
+    {
+      "module_id": "011",
+      "module_name": "Breakout Statistics",
+      "category": "Regime Detection",
+      "question": "When BTC breaks above or below a recent trading range, what statistically happens afterward?",
+      "hypothesis": "Breakout behavior is not random. Breakout outcomes depend on volatility regime, prior range compression, and breakout strength. We test competing hypotheses objectively without assuming breakouts work or fail.",
+      "rationale": "Breakout trading is one of the oldest strategies in financial markets. However, most retail approaches rely on subjective chart patterns. Module 011 measures objective breakout behavior using only price data and Module 010 volatility states. No indicators, no SMC, no ICT.",
+      "methodology": "Phase 1: Breakout Detection\n1. Load OHLCV data\n2. Compute rolling highest high and lowest low (excluding current bar)\n3. Detect breakouts: close > previous N-bar high (up) or < previous N-bar low (down)\n4. Measure post-breakout behavior: MFE, MAE, bars to peak, bars to failure\n5. Export breakout events and summary statistics\n\nPhase 2: Regime-Conditional Analysis (future)\n- Cross-reference with Module 010 volatility states\n- Measure breakout behavior by volatility regime",
+      "statistics": [
+        "Breakout count (up/down)",
+        "Mean/median MFE after breakout",
+        "Mean/median MAE after breakout",
+        "Failure rate (price returns inside range)",
+        "Bars to peak distribution",
+        "Bars to failure distribution"
+      ],
+      "depends_on": [
+        "000",
+        "010"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-phase1",
+      "created_date": "2026-07-07",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-07",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-07T22:26:03.045947",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-07T22:34:41.813851",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-07T22:34:46.922849",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Lookback window is fixed (not adaptive)",
+        "Breakout definition uses close price only",
+        "Does not account for false breakouts within same bar",
+        "Post-breakout measurement window is fixed (100 bars)"
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Volatility regime-conditional breakout analysis",
+        "Adaptive lookback based on ATR",
+        "Breakout strength quantification",
+        "Multi-timeframe breakout confirmation"
+      ],
+      "references": [],
+      "produces": [
+        "breakout_events",
+        "breakout_summary",
+        "breakout_diagnostics"
+      ]
+    },
+    {
+      "module_id": "012",
+      "module_name": "Swing Structure",
+      "category": "Market Microstructure",
+      "question": "How does BTC naturally organize into swing highs and swing lows, and what statistical properties do those swings exhibit?",
+      "hypothesis": "BTC price action organizes into measurable swing structures. Swing size, duration, and frequency exhibit statistical regularities that vary across timeframes.",
+      "rationale": "Swing structure represents the natural geometry of price movement. Understanding swing behavior is foundational for market structure analysis, support/resistance identification, and liquidity assessment. This module measures swings objectively without ICT, SMC, or ZigZag concepts.",
+      "methodology": "Phase 1.0: Skeleton architecture\nPhase 1.1: Fractal swing detection (k=2)\n  - Swing High: High(i) > High(i-k..i-1) AND High(i) > High(i+1..i+k)\n  - Swing Low: Low(i) < Low(i-k..i-1) AND Low(i) < Low(i+1..i+k)\nPhase 1.2: Swing sequence construction\nPhase 1.3: Swing statistics (amplitude, duration, HH/HL/LH/LL)\nPhase 1.4: Cross-timeframe comparison\n\nNote: Fractal detection uses future bars for confirmation.\nThis is acceptable for research purposes.",
+      "statistics": [
+        "Total swing highs",
+        "Total swing lows",
+        "Average swing distance (%)",
+        "Median swing distance",
+        "Maximum swing distance",
+        "Average swing duration",
+        "Median swing duration",
+        "HH count (higher high)",
+        "HL count (higher low)",
+        "LH count (lower high)",
+        "LL count (lower low)"
+      ],
+      "depends_on": [
+        "000"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-phase1",
+      "created_date": "2026-07-08",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-08",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-08T01:09:06.876040",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-08T01:09:18.861212",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-08T01:09:18.861212",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Fractal detection introduces k-bar confirmation lag",
+        "Swing definition uses strict inequality (no equal highs/lows)",
+        "Minimum swing distance not yet enforced",
+        "Swing detection is not causal (uses future bars)"
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Swing volume profile analysis",
+        "Swing-conditional breakout behavior",
+        "Multi-timeframe swing alignment",
+        "Causal swing detection for strategy modules"
+      ],
+      "references": [],
+      "produces": [
+        "swing_points",
+        "swing_statistics",
+        "swing_summary"
+      ]
+    },
+    {
+      "module_id": "013",
+      "module_name": "Range Expansion & Compression",
+      "category": "Volatility Analysis",
+      "question": "How does BTC alternate between periods of range compression and range expansion?",
+      "hypothesis": "Periods of low realized range tend to cluster and are followed by statistically larger range expansion.",
+      "rationale": "Range expansion and compression cycles are fundamental to market behavior. Compression periods (low volatility, narrow ranges) often precede expansion periods (high volatility, wide ranges). Understanding these cycles helps characterize market regime transitions.",
+      "methodology": "Phase 1.0: Skeleton architecture (current)\nPhase 1.1: True Range and ATR calculation\nPhase 1.2: Range ratio and percentile classification\nPhase 1.3: State assignment and segment detection\nPhase 1.4: Expansion/compression statistics",
+      "statistics": [
+        "ATR values",
+        "Range ratio (TR / ATR)",
+        "Percentile ranks",
+        "Compression/expansion state counts",
+        "Segment durations",
+        "Transition frequencies"
+      ],
+      "depends_on": [
+        "000"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-phase1",
+      "created_date": "2026-07-08",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-08",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-08T15:30:24.343623",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-08T15:39:06.034372",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-08T15:39:10.672644",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "ATR window is fixed at 14",
+        "Percentile window is fixed at 252",
+        "Thresholds are percentile-based (relative, not absolute)"
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Adaptive ATR windows",
+        "Multi-timeframe compression alignment",
+        "Compression-conditional breakout analysis"
+      ],
+      "references": [],
+      "produces": [
+        "true_range_series",
+        "atr_series",
+        "range_ratio",
+        "expansion_states",
+        "compression_segments"
+      ]
+    },
+    {
+      "module_id": "015",
+      "module_name": "Compression Analysis",
+      "category": "Volatility Analysis",
+      "question": "What happens after BTC enters a compression (low range) state? How long does compression persist, and what directional moves follow?",
+      "hypothesis": "Compression periods precede directional expansion. The duration and depth of compression influences subsequent price movement magnitude and direction.",
+      "rationale": "Compression represents market indecision and energy building. Understanding post-compression behavior is essential for anticipating breakout direction and magnitude.",
+      "methodology": "Phase 1: Compression Detection & Analysis\n1. Identify compression states from Module 013 range percentiles\n2. Detect contiguous compression segments\n3. Compute duration statistics\n4. Measure post-compression price movement\n5. Export results\n\nReuses atlas.core.volatility for ATR/percentile calculations.",
+      "statistics": [
+        "Compression frequency",
+        "Compression duration (mean, median, max, P95, P99)",
+        "Post-compression directional bias",
+        "Post-compression move magnitude",
+        "Expansion probability after compression"
+      ],
+      "depends_on": [
+        "000",
+        "013"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-phase1",
+      "created_date": "2026-07-14",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-14",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-14T09:23:34.863712",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-14T09:23:35.490857",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-14T09:24:33.804985",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Compression threshold is fixed at 25th percentile",
+        "Post-compression lookahead is fixed",
+        "Does not account for macro market context"
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Compression depth analysis",
+        "Multi-timeframe compression alignment",
+        "Compression-conditional breakout strategies"
+      ],
+      "references": [],
+      "produces": [
+        "compression_state",
+        "compression_segments",
+        "compression_statistics",
+        "post_compression_moves"
+      ]
+    },
+    {
+      "module_id": "016",
+      "module_name": "Mean Reversion",
+      "category": "Price Behavior",
+      "question": "How frequently does BTC revert after statistically significant deviations?",
+      "hypothesis": "Large deviations from equilibrium have higher probability of reverting.",
+      "rationale": "Mean reversion is one of the most fundamental market behaviors. Understanding when and how strongly BTC reverts after extreme moves is essential for timing entries, setting profit targets, and distinguishing trending from ranging environments.",
+      "methodology": "Phase 1.0: Skeleton architecture (current)\nPhase 1.1: Deviation calculation from rolling equilibrium\nPhase 1.2: Extreme detection using z-score thresholds\nPhase 1.3: Reversion detection and measurement\nPhase 1.4: Duration and magnitude statistics\nPhase 1.5: Summary and export",
+      "statistics": [
+        "Deviation from equilibrium (z-score)",
+        "Extreme event frequency",
+        "Reversion probability",
+        "Time to reversion (mean, median, max)",
+        "Reversion magnitude (mean, median, max)",
+        "Failure rate (no reversion within window)"
+      ],
+      "depends_on": [
+        "010",
+        "013",
+        "015"
+      ],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "0.1.0-phase1",
+      "created_date": "2026-07-14",
+      "status": "Completed",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": "2026-07-14",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-14T11:53:54.266101",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-14T11:53:54.544000",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-14T11:53:56.021007",
+          "reason": "All datasets processed successfully"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Equilibrium is defined by simple rolling mean",
+        "Z-score threshold is fixed at 2.0",
+        "Maximum reversion window is fixed at 50 bars",
+        "Does not account for volatility regime"
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Volatility-regime conditional reversion",
+        "Adaptive equilibrium windows",
+        "Multi-timeframe reversion alignment",
+        "Reversion-conditional entry strategies"
+      ],
+      "references": [],
+      "produces": [
+        "deviation_series",
+        "extreme_events",
+        "reversion_events",
+        "reversion_statistics"
+      ]
+    },
+    {
+      "module_id": "017",
+      "module_name": "Volume Behaviour",
+      "category": "Volume Behavior",
+      "question": "How does Bitcoin trading volume behave statistically through time?",
+      "hypothesis": "Bitcoin volume forms persistent statistical regimes that can be objectively measured.",
+      "rationale": "Volume is one of the most important market variables. Understanding how long high and low volume regimes last, how often they transition, and how persistent they are provides behavioural knowledge independent of price.",
+      "methodology": "Volume cleaning\nRolling normalization\nRolling percentiles\nVolume regime classification\nSegment detection\nBehaviour statistics\nExport",
+      "statistics": [
+        "Mean normalized volume",
+        "Median normalized volume",
+        "Volume percentile distribution",
+        "Volume regime occupancy",
+        "Transition matrix",
+        "Persistence",
+        "Segment duration",
+        "Largest regime",
+        "Average regime length"
+      ],
+      "depends_on": [],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-16",
+      "status": "Validated",
+      "validated": true,
+      "validation_date": "2026-07-16",
+      "completion_date": "2026-07-16",
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-16T03:43:10.388821",
+          "reason": "Module created"
+        },
+        {
+          "from": "Planned",
+          "to": "In Progress",
+          "timestamp": "2026-07-16T05:22:05.771377",
+          "reason": "Research execution started"
+        },
+        {
+          "from": "In Progress",
+          "to": "Completed",
+          "timestamp": "2026-07-16T05:22:40.490650",
+          "reason": "All datasets processed successfully"
+        },
+        {
+          "from": "Completed",
+          "to": "Validated",
+          "timestamp": "2026-07-16T05:22:40.538067",
+          "reason": "Results independently verified"
+        }
+      ],
+      "fingerprint": {
+        "module_id": "017",
+        "version": "1.0.0",
+        "created_at": "2026-07-16T05:22:40.537243",
+        "source_hash": "450a3e4ef8418df726f407c0a4d1200ef4927c7b20ee6f358d3ef390268e44eb",
+        "protocol_hash": "e73459780284a6bd3c21df9f72b9c8df1338108dc30b6c2ff7eb849f30d933cd",
+        "validation_hash": "",
+        "frozen_hash": ""
+      },
+      "limitations": [
+        "Uses rolling normalization.",
+        "Uses fixed percentile window.",
+        "Measures behaviour only.",
+        "Does not analyse price relationship."
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Volume-price interaction",
+        "Volume-volatility interaction",
+        "Volume clustering",
+        "Liquidity regime analysis"
+      ],
+      "references": [],
+      "produces": [
+        "normalized_volume",
+        "volume_percentiles",
+        "volume_states",
+        "volume_segments",
+        "volume_statistics"
+      ]
+    },
+    {
+      "module_id": "018",
+      "module_name": "Gap Behaviour",
+      "category": "Price Behavior",
+      "question": "How does Bitcoin behave after price gaps?",
+      "hypothesis": "Gap events exhibit statistically measurable behaviour.",
+      "rationale": "Measure the statistical behaviour of price gaps without assuming any trading edge.",
+      "methodology": "Detect price gaps, classify their magnitude, measure their frequency and distribution.",
+      "statistics": [
+        "gap_count",
+        "gap_frequency",
+        "mean_gap",
+        "median_gap",
+        "std_gap",
+        "var_gap",
+        "min_gap",
+        "max_gap",
+        "p25_gap",
+        "p75_gap",
+        "p90_gap",
+        "p95_gap"
+      ],
+      "depends_on": [],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-16",
+      "status": "Planned",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": null,
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-16T06:33:54.893948",
+          "reason": "Module created"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Gap detection depends on high/low placement.",
+        "Does not analyse gap fill behaviour yet."
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Gap fill probability",
+        "Gap behaviour by volatility regime",
+        "Gap clustering analysis"
+      ],
+      "references": [],
+      "produces": [
+        "gap_events",
+        "gap_statistics",
+        "gap_distribution"
+      ]
+    },
+    {
+      "module_id": "019",
+      "module_name": "Momentum Decay",
+      "category": "Price Behavior",
+      "question": "How does momentum decay after statistically significant directional impulses?",
+      "hypothesis": "Large directional impulses lose strength in measurable statistical patterns.",
+      "rationale": "Measure momentum persistence and exhaustion without constructing trading signals.",
+      "methodology": "Impulse detection, thresholding, decay measurement, and statistical analysis.",
+      "statistics": [
+        "impulse_events",
+        "mean_decay",
+        "median_decay",
+        "std_decay",
+        "max_decay",
+        "min_decay"
+      ],
+      "depends_on": [],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-16",
+      "status": "Planned",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": null,
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-16T11:27:27.582647",
+          "reason": "Module created"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Uses fixed lookback window.",
+        "Threshold is percentile-based.",
+        "Measures behaviour only."
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Momentum decay by volatility regime",
+        "Multi-timeframe momentum alignment",
+        "Momentum exhaustion forecasting"
+      ],
+      "references": [],
+      "produces": [
+        "impulse_events",
+        "momentum_statistics",
+        "decay_distribution"
+      ]
+    },
+    {
+      "module_id": "020",
+      "module_name": "Liquidity Behaviour",
+      "category": "Price Behavior",
+      "question": "How does market liquidity behave statistically over time?",
+      "hypothesis": "Liquidity forms measurable statistical regimes.",
+      "rationale": "Measure liquidity behaviour without constructing trading signals.",
+      "methodology": "Liquidity concentration, normalization, state classification and depletion analysis.",
+      "statistics": [
+        "mean_liquidity",
+        "median_liquidity",
+        "std_liquidity",
+        "mean_depletion",
+        "state_distribution"
+      ],
+      "depends_on": [],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-16",
+      "status": "Planned",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": null,
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-16T12:16:33.883762",
+          "reason": "Module created"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Uses rolling normalization.",
+        "State thresholds are quantile-based.",
+        "Measures behaviour only."
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Liquidity-price interaction",
+        "Liquidity-volatility relationship",
+        "Liquidity regime transitions"
+      ],
+      "references": [],
+      "produces": [
+        "liquidity_series",
+        "normalized_liquidity",
+        "liquidity_states",
+        "liquidity_statistics",
+        "liquidity_distribution"
+      ]
+    },
+    {
+      "module_id": "021",
+      "module_name": "Trend Persistence",
+      "category": "Price Behavior",
+      "question": "How long do statistically detected trends persist?",
+      "hypothesis": "Trend duration exhibits measurable statistical properties.",
+      "rationale": "Quantify trend persistence without generating trading signals.",
+      "methodology": "Trend detection, duration analysis, transition detection, and persistence statistics.",
+      "statistics": [
+        "mean_duration",
+        "median_duration",
+        "max_duration",
+        "transition_count"
+      ],
+      "depends_on": [],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-17",
+      "status": "Planned",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": null,
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-17T07:45:40.437256",
+          "reason": "Module created"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Trend is defined using price difference over a fixed lookback.",
+        "No predictive model is used.",
+        "Research only."
+      ],
+      "conclusions": [],
+      "future_research": [
+        "EMA slope comparison",
+        "Regression-based trends",
+        "Trend strength metrics"
+      ],
+      "references": [],
+      "produces": [
+        "trend_series",
+        "trend_duration",
+        "trend_transitions",
+        "trend_statistics",
+        "trend_distribution"
+      ]
+    },
+    {
+      "module_id": "022",
+      "module_name": "Market State Classification",
+      "category": "Price Behavior",
+      "question": "What statistically observable market states exist?",
+      "hypothesis": "Trending and ranging regimes can be measured objectively.",
+      "rationale": "Describe market state without producing trading signals.",
+      "methodology": "Classify market state from trend behaviour, measure transitions and occupancy.",
+      "statistics": [
+        "trending",
+        "ranging",
+        "transition_count"
+      ],
+      "depends_on": [],
+      "required_datasets": [
+        "BTC_15m",
+        "BTC_1h",
+        "BTC_4h"
+      ],
+      "author": "Project Atlas",
+      "version": "1.0.0",
+      "created_date": "2026-07-17",
+      "status": "Planned",
+      "validated": false,
+      "validation_date": null,
+      "completion_date": null,
+      "status_history": [
+        {
+          "from": "None",
+          "to": "Planned",
+          "timestamp": "2026-07-17T08:04:42.436720",
+          "reason": "Module created"
+        }
+      ],
+      "fingerprint": null,
+      "limitations": [
+        "Uses binary trend/range classification.",
+        "No forecasting.",
+        "Research only."
+      ],
+      "conclusions": [],
+      "future_research": [
+        "Multi-state classification",
+        "Volatility regime integration",
+        "Liquidity-aware market states"
+      ],
+      "references": [],
+      "produces": [
+        "market_state",
+        "state_transitions",
+        "market_state_statistics",
+        "market_state_distribution"
+      ]
+    }
+  ]
+}

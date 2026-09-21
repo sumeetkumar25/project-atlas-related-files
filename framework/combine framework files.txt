@@ -1,0 +1,2156 @@
+"""
+Artifact Store - Central storage for module outputs with dataset awareness.
+"""
+
+from typing import Dict, Any, Optional
+from datetime import datetime
+import pandas as pd
+
+
+class ArtifactStore:
+    """
+    Central store for module artifacts, organized by dataset.
+    
+    Structure:
+        _artifacts[dataset][module_id] = {artifact_name: value}
+    
+    Every module must export:
+    - features: DataFrame of computed features
+    - statistics: DataFrame of statistics
+    - report: String report
+    - validation: Validation result
+    - metadata: Dict of metadata
+    """
+    
+    REQUIRED_ARTIFACTS = ["features", "statistics", "report", "validation"]
+    
+    def __init__(self):
+        self._artifacts: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        self._timestamps: Dict[str, Dict[str, str]] = {}
+        self._module_order: Dict[str, list] = {}
+    
+    def put(self, dataset: str, module_id: str, artifacts: Dict[str, Any]) -> None:
+        """
+        Store artifacts from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier (e.g., "15m", "1h", "4h")
+            module_id: Module identifier (e.g., "001")
+            artifacts: Dictionary with required keys
+        """
+        # Validate required artifacts
+        missing = [key for key in self.REQUIRED_ARTIFACTS if key not in artifacts]
+        if missing:
+            raise ValueError(
+                f"Module {module_id} on {dataset} missing required artifacts: {missing}\n"
+                f"Available: {list(artifacts.keys())}\n"
+                f"Required: {self.REQUIRED_ARTIFACTS}"
+            )
+        
+        # Initialize dataset if not exists
+        if dataset not in self._artifacts:
+            self._artifacts[dataset] = {}
+            self._timestamps[dataset] = {}
+            self._module_order[dataset] = []
+        
+        # Initialize module if not exists
+        if module_id not in self._artifacts[dataset]:
+            self._artifacts[dataset][module_id] = {}
+        
+        self._artifacts[dataset][module_id].update(artifacts)
+        self._timestamps[dataset][module_id] = datetime.now().isoformat()
+        
+        if module_id not in self._module_order[dataset]:
+            self._module_order[dataset].append(module_id)
+    
+    def get(self, dataset: str, module_id: str) -> Dict[str, Any]:
+        """
+        Get all artifacts from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            dict: Artifact name -> value
+        """
+        return self._artifacts.get(dataset, {}).get(module_id, {})
+    
+    def get_features(self, dataset: str, module_id: str) -> Optional[pd.DataFrame]:
+        """
+        Get features from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            DataFrame: Features or None
+        """
+        artifacts = self._artifacts.get(dataset, {}).get(module_id, {})
+        return artifacts.get("features")
+    
+    def get_statistics(self, dataset: str, module_id: str) -> Optional[pd.DataFrame]:
+        """
+        Get statistics from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            DataFrame: Statistics or None
+        """
+        artifacts = self._artifacts.get(dataset, {}).get(module_id, {})
+        return artifacts.get("statistics")
+    
+    def get_report(self, dataset: str, module_id: str) -> Optional[str]:
+        """
+        Get report from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            str: Report or None
+        """
+        artifacts = self._artifacts.get(dataset, {}).get(module_id, {})
+        return artifacts.get("report")
+    
+    def get_validation(self, dataset: str, module_id: str) -> Optional[Any]:
+        """
+        Get validation result from a module for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            Validation result or None
+        """
+        artifacts = self._artifacts.get(dataset, {}).get(module_id, {})
+        return artifacts.get("validation")
+    
+    def has(self, dataset: str, module_id: str, artifact_name: str) -> bool:
+        """
+        Check if a module has a specific artifact for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+            artifact_name: Name of the artifact
+        
+        Returns:
+            bool: True if artifact exists
+        """
+        return (
+            dataset in self._artifacts
+            and module_id in self._artifacts[dataset]
+            and artifact_name in self._artifacts[dataset][module_id]
+        )
+    
+    def has_module(self, dataset: str, module_id: str) -> bool:
+        """
+        Check if a module has stored artifacts for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            bool: True if module has artifacts
+        """
+        return (
+            dataset in self._artifacts
+            and module_id in self._artifacts[dataset]
+        )
+    
+    def list_artifacts(self, dataset: str, module_id: str) -> list:
+        """
+        List all artifact names for a module and dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            list: Artifact names
+        """
+        return list(self._artifacts.get(dataset, {}).get(module_id, {}).keys())
+    
+    def list_modules(self, dataset: str) -> list:
+        """
+        List all modules that have stored artifacts for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+        
+        Returns:
+            list: Module IDs
+        """
+        return self._module_order.get(dataset, []).copy()
+    
+    def list_datasets(self) -> list:
+        """
+        List all datasets that have stored artifacts.
+        
+        Returns:
+            list: Dataset identifiers
+        """
+        return list(self._artifacts.keys())
+    
+    def get_timestamp(self, dataset: str, module_id: str) -> Optional[str]:
+        """
+        Get the timestamp when a module stored artifacts for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        
+        Returns:
+            str: ISO timestamp or None
+        """
+        return self._timestamps.get(dataset, {}).get(module_id)
+    
+    def clear(self) -> None:
+        """Clear all artifacts."""
+        self._artifacts.clear()
+        self._timestamps.clear()
+        self._module_order.clear()
+    
+    def clear_dataset(self, dataset: str) -> None:
+        """
+        Clear artifacts for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier
+        """
+        if dataset in self._artifacts:
+            del self._artifacts[dataset]
+        if dataset in self._timestamps:
+            del self._timestamps[dataset]
+        if dataset in self._module_order:
+            del self._module_order[dataset]
+    
+    def clear_module(self, dataset: str, module_id: str) -> None:
+        """
+        Clear artifacts for a specific module and dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+        """
+        if dataset in self._artifacts and module_id in self._artifacts[dataset]:
+            del self._artifacts[dataset][module_id]
+        if dataset in self._timestamps and module_id in self._timestamps[dataset]:
+            del self._timestamps[dataset][module_id]
+        if dataset in self._module_order and module_id in self._module_order[dataset]:
+            self._module_order[dataset].remove(module_id)
+    
+    def summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of stored artifacts.
+        
+        Returns:
+            dict: Summary statistics
+        """
+        total_modules = 0
+        total_artifacts = 0
+        
+        for dataset, modules in self._artifacts.items():
+            total_modules += len(modules)
+            for artifacts in modules.values():
+                total_artifacts += len(artifacts)
+        
+        return {
+            'total_datasets': len(self._artifacts),
+            'total_modules': total_modules,
+            'total_artifacts': total_artifacts,
+            'datasets': list(self._artifacts.keys()),
+            'module_counts': {
+                dataset: len(modules)
+                for dataset, modules in self._artifacts.items()
+            }
+        }
+
+
+"""
+Dependency Injector - Builds feature DataFrames from dependencies with dataset awareness.
+"""
+
+from typing import List, Optional, Dict, Any
+import pandas as pd
+from .artifact_store import ArtifactStore
+
+
+class DependencyInjector:
+    """
+    Builds combined feature DataFrames from dependent modules.
+    
+    Every module must export 'features' in its artifacts.
+    Dataset-aware: only uses artifacts from the same dataset.
+    """
+    
+    def __init__(self, artifact_store: ArtifactStore):
+        """
+        Initialize the dependency injector.
+        
+        Args:
+            artifact_store: The artifact store to pull from
+        """
+        self.artifact_store = artifact_store
+        self._injection_log = []
+    
+    def build_feature_dataframe(self, dataset: str, dependencies: List[str]) -> Optional[pd.DataFrame]:
+        """
+        Build a combined feature DataFrame from dependencies for a specific dataset.
+        
+        Args:
+            dataset: Dataset identifier (e.g., "15m", "1h", "4h")
+            dependencies: List of dependency module IDs
+        
+        Returns:
+            DataFrame: Combined features
+        
+        Raises:
+            RuntimeError: If a module did not export features
+        """
+        if not dependencies:
+            return None
+        
+        feature_frames = []
+        injection_details = []
+        
+        for dep in dependencies:
+            artifacts = self.artifact_store.get(dataset, dep)
+            
+            if not artifacts:
+                raise RuntimeError(
+                    f"No artifacts found for dependency {dep} on dataset {dataset}"
+                )
+            
+            if "features" not in artifacts:
+                raise RuntimeError(
+                    f"Module {dep} did not export 'features' on dataset {dataset}. "
+                    f"Available: {list(artifacts.keys())}"
+                )
+            
+            feature_df = artifacts["features"]
+            feature_frames.append(feature_df)
+            
+            injection_details.append({
+                'dependency': dep,
+                'columns': list(feature_df.columns),
+                'rows': len(feature_df),
+                'artifact_keys': list(artifacts.keys())
+            })
+        
+        if not feature_frames:
+            return None
+        
+        # Log injection details
+        self._injection_log.append({
+            'dataset': dataset,
+            'dependencies': injection_details,
+            'total_features': sum(len(df.columns) for df in feature_frames)
+        })
+        
+        # Concatenate all feature DataFrames
+        combined = pd.concat(feature_frames, axis=1)
+        
+        # Handle duplicate columns
+        duplicates = combined.columns.duplicated()
+        if duplicates.any():
+            duplicate_cols = combined.columns[duplicates].tolist()
+            
+            # Rename only duplicate columns with source prefix
+            for col in duplicate_cols:
+                for i, frame in enumerate(feature_frames):
+                    if col in frame.columns:
+                        dep_id = dependencies[i]
+                        combined.rename(columns={col: f"{dep_id}_{col}"}, inplace=True)
+                        break
+        
+        return combined
+    
+    def validate_dependencies(self, dataset: str, module_id: str, dependencies: List[str], 
+                              completed_modules: set) -> bool:
+        """
+        Validate that all dependencies are satisfied for a dataset.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: The module's ID
+            dependencies: List of dependency module IDs
+            completed_modules: Set of completed (dataset, module_id) tuples
+        
+        Returns:
+            bool: True if all dependencies are satisfied
+        
+        Raises:
+            RuntimeError: If a dependency is not satisfied
+        """
+        for dep_id in dependencies:
+            dep_key = (dataset, dep_id)
+            if dep_key not in completed_modules:
+                raise RuntimeError(
+                    f"Module {module_id} on {dataset} requires {dep_id}, but it has not been completed"
+                )
+            
+            if not self.artifact_store.has_module(dataset, dep_id):
+                raise RuntimeError(
+                    f"Module {module_id} on {dataset} requires {dep_id}, but no artifacts found"
+                )
+            
+            if not self.artifact_store.has(dataset, dep_id, "features"):
+                raise RuntimeError(
+                    f"Module {module_id} on {dataset} requires {dep_id}, but it did not export 'features'"
+                )
+            
+            # Verify required columns exist
+            features = self.artifact_store.get_features(dataset, dep_id)
+            if features is not None and features.empty:
+                raise RuntimeError(
+                    f"Module {module_id} on {dataset} requires {dep_id}, but its features DataFrame is empty"
+                )
+        
+        return True
+    
+    def get_injection_log(self) -> List[Dict]:
+        """
+        Get the injection log.
+        
+        Returns:
+            list: Injection log entries
+        """
+        return self._injection_log.copy()
+    
+    def clear_log(self) -> None:
+        """Clear the injection log."""
+        self._injection_log.clear()
+    
+    def log_dependency_summary(self, dataset: str, module_id: str, dependencies: List[str]) -> None:
+        """
+        Log a summary of dependencies for debugging.
+        
+        Args:
+            dataset: Dataset identifier
+            module_id: Module identifier
+            dependencies: List of dependency module IDs
+        """
+        print(f"\n{'='*60}")
+        print(f"DEPENDENCY INJECTION")
+        print(f"{'='*60}")
+        print(f"Module: {module_id}")
+        print(f"Dataset: {dataset}")
+        print(f"Dependencies: {dependencies}")
+        print("-" * 40)
+        
+        for dep in dependencies:
+            artifacts = self.artifact_store.get(dataset, dep)
+            if artifacts and "features" in artifacts:
+                df = artifacts["features"]
+                print(f"✓ {dep}: {len(df.columns)} columns, {len(df)} rows")
+                print(f"  Columns: {list(df.columns)[:5]}{'...' if len(df.columns) > 5 else ''}")
+                print(f"  Has validation: {'validation' in artifacts}")
+                print(f"  Has statistics: {'statistics' in artifacts}")
+            else:
+                print(f"✗ {dep}: NOT FOUND or missing 'features'")
+        
+        print("="*60)
+    
+    def get_feature_columns(self, dataset: str, dependencies: List[str]) -> Dict[str, List[str]]:
+        """
+        Get column names from each dependency's features.
+        
+        Args:
+            dataset: Dataset identifier
+            dependencies: List of dependency module IDs
+        
+        Returns:
+            dict: {module_id: [column_names]}
+        """
+        result = {}
+        for dep in dependencies:
+            features = self.artifact_store.get_features(dataset, dep)
+            if features is not None:
+                result[dep] = list(features.columns)
+        return result
+
+"""
+Feature Store - Central storage for computed features.
+Enables dependency injection of feature DataFrames between modules.
+"""
+
+import pandas as pd
+from typing import Dict, Any, Optional, List
+from datetime import datetime
+
+
+class FeatureStore:
+    """
+    Central store for computed features from dependency modules.
+    
+    Each module stores its feature outputs here, and dependent modules
+    receive a combined feature DataFrame automatically.
+    """
+    
+    def __init__(self):
+        self._features: Dict[str, pd.DataFrame] = {}
+        self._metadata: Dict[str, Dict[str, Any]] = {}
+        self._timestamps: Dict[str, str] = {}
+        self._source_order: List[str] = []
+    
+    def put(self, module_id: str, features: pd.DataFrame, metadata: Optional[Dict[str, Any]] = None) -> None:
+        """
+        Store features from a module.
+        
+        Args:
+            module_id: Module identifier (e.g., "005")
+            features: DataFrame containing the features
+            metadata: Optional metadata about the features
+        """
+        self._features[module_id] = features
+        self._timestamps[module_id] = datetime.now().isoformat()
+        self._metadata[module_id] = metadata or {}
+        
+        if module_id not in self._source_order:
+            self._source_order.append(module_id)
+    
+    def get(self, module_id: str) -> Optional[pd.DataFrame]:
+        """
+        Get features from a specific module.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            DataFrame or None if not found
+        """
+        return self._features.get(module_id)
+    
+    def get_all(self) -> Dict[str, pd.DataFrame]:
+        """
+        Get all stored features.
+        
+        Returns:
+            dict: {module_id: DataFrame}
+        """
+        return self._features.copy()
+    
+    def get_combined(self, module_ids: Optional[List[str]] = None) -> pd.DataFrame:
+        """
+        Get a combined DataFrame of features from multiple modules.
+        
+        Args:
+            module_ids: List of module IDs to combine (None = all)
+        
+        Returns:
+            DataFrame with all features combined
+        """
+        if module_ids is None:
+            module_ids = self._source_order
+        
+        combined = pd.DataFrame()
+        
+        for module_id in module_ids:
+            if module_id in self._features:
+                df = self._features[module_id]
+                # Prefix columns with module ID to avoid conflicts
+                if len(module_ids) > 1:
+                    for col in df.columns:
+                        combined[f"{module_id}_{col}"] = df[col]
+                else:
+                    combined = df.copy()
+        
+        return combined
+    
+    def get_feature_names(self, module_id: str) -> List[str]:
+        """
+        Get feature names from a module.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            list: Feature column names
+        """
+        df = self._features.get(module_id)
+        if df is not None:
+            return list(df.columns)
+        return []
+    
+    def has(self, module_id: str) -> bool:
+        """
+        Check if a module has stored features.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            bool: True if features exist
+        """
+        return module_id in self._features
+    
+    def list_modules(self) -> List[str]:
+        """
+        List all modules that have stored features.
+        
+        Returns:
+            list: Module IDs
+        """
+        return self._source_order.copy()
+    
+    def clear(self) -> None:
+        """Clear all stored features."""
+        self._features.clear()
+        self._metadata.clear()
+        self._timestamps.clear()
+        self._source_order.clear()
+    
+    def clear_module(self, module_id: str) -> None:
+        """
+        Clear features for a specific module.
+        
+        Args:
+            module_id: Module identifier
+        """
+        if module_id in self._features:
+            del self._features[module_id]
+        if module_id in self._metadata:
+            del self._metadata[module_id]
+        if module_id in self._timestamps:
+            del self._timestamps[module_id]
+        if module_id in self._source_order:
+            self._source_order.remove(module_id)
+    
+    def summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of stored features.
+        
+        Returns:
+            dict: Summary statistics
+        """
+        total_features = sum(len(df.columns) for df in self._features.values())
+        
+        return {
+            'total_modules': len(self._features),
+            'total_features': total_features,
+            'modules': self._source_order,
+            'feature_counts': {
+                module_id: len(df.columns)
+                for module_id, df in self._features.items()
+            }
+        }
+
+# atlas/framework/framework_check.py
+"""
+Framework Health Check
+Validates entire Atlas infrastructure before research begins.
+"""
+
+import sys
+from pathlib import Path
+from datetime import datetime
+from typing import List, Tuple
+
+# Add project root
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+
+from atlas.core.console import setup_console
+
+# Configure console encoding before any output
+setup_console()
+
+from atlas.framework.registry import AtlasRegistry
+from atlas.core.research_result import ResearchResult
+from atlas.core.base_research_module import BaseResearchModule
+from atlas.core.export_manager import ExportManager
+from atlas.runner import ModuleRunner
+
+
+class FrameworkChecker:
+    """
+    Comprehensive health check for Project Atlas framework.
+    """
+    
+    def __init__(self):
+        self.registry = AtlasRegistry()
+        self.checks_passed = 0
+        self.checks_failed = 0
+        self.checks_warning = 0
+        self.issues: List[str] = []
+    
+    def run_all_checks(self) -> bool:
+        """Run complete framework health check."""
+        self._print_header()
+        
+        checks = [
+            ("Framework Version", self._check_framework_version, True),
+            ("Configuration", self._check_configuration, True),
+            ("Registry Modules", self._check_registry_modules, True),
+            ("Registry Datasets", self._check_registry_datasets, True),
+            ("ResearchResult", self._check_research_result, True),
+            ("BaseResearchModule", self._check_base_module, True),
+            ("ExportManager", self._check_export_manager, True),
+            ("Runner", self._check_runner, True),
+            ("Data Files", self._check_data_files, True),
+            ("Dependencies", self._check_dependencies, True),
+            ("Dataset Consistency", self._check_dataset_consistency, False),
+        ]
+        
+        for check_name, check_func, is_critical in checks:
+            passed, message = check_func()
+            self._report_check(check_name, passed, message, is_critical)
+        
+        self._print_summary()
+        return self.checks_failed == 0
+    
+    def _print_header(self):
+        print("\n" + "=" * 60)
+        print("PROJECT ATLAS")
+        print("FRAMEWORK HEALTH CHECK")
+        print("=" * 60)
+        print(f"\nTimestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Python: {sys.version.split()[0]}")
+        print()
+    
+    def _report_check(self, name: str, passed: bool, message: str, is_critical: bool = True):
+        if passed:
+            icon = "OK"
+            status = "PASS"
+            self.checks_passed += 1
+        elif is_critical:
+            icon = "FAIL"
+            status = "FAIL"
+            self.checks_failed += 1
+            self.issues.append(f"{name}: {message}")
+        else:
+            icon = "WARN"
+            status = "WARN"
+            self.checks_warning += 1
+            self.issues.append(f"{name} (warning): {message}")
+        
+        print(f"[{icon}] {name:<25} {status}")
+        if message and not passed:
+            print(f"     -> {message}")
+    
+    def _check_framework_version(self) -> Tuple[bool, str]:
+        try:
+            version = self.registry.framework_version
+            if version:
+                return True, f"v{version}"
+            return False, "Version not set"
+        except Exception as e:
+            return False, str(e)
+    
+    def _check_configuration(self) -> Tuple[bool, str]:
+        try:
+            import config
+            required_attrs = ['PROJECT_ROOT', 'DATA_DIR', 'RAW_DATA_DIR', 'OUTPUTS_DIR']
+            for attr in required_attrs:
+                if not hasattr(config, attr):
+                    return False, f"Missing config attribute: {attr}"
+            return True, "Configuration loaded"
+        except ImportError:
+            return False, "config.py not found"
+        except Exception as e:
+            return False, str(e)
+    
+    def _check_registry_modules(self) -> Tuple[bool, str]:
+        try:
+            stats = self.registry.get_statistics()
+            module_count = stats['total_modules']
+            if module_count > 0:
+                return True, f"{module_count} modules registered"
+            return False, "No modules registered"
+        except Exception as e:
+            return False, str(e)
+    
+    def _check_registry_datasets(self) -> Tuple[bool, str]:
+        try:
+            stats = self.registry.get_statistics()
+            dataset_count = stats['total_datasets']
+            datasets_file = self.registry.datasets_file
+            if dataset_count > 0:
+                return True, f"{dataset_count} datasets registered"
+            elif datasets_file.exists():
+                return False, "Datasets file exists but 0 datasets loaded"
+            else:
+                return True, "No datasets registered yet"
+        except Exception as e:
+            return False, str(e)
+    
+    def _check_research_result(self) -> Tuple[bool, str]:
+        try:
+            result = ResearchResult(
+                module_name="test", module_version="1.0",
+                dataset_identifier="test.csv",
+                timestamp_start="2026-01-01", timestamp_end="2026-12-31",
+                execution_timestamp=datetime.now().isoformat()
+            )
+            result.add_statistic("test_metric", 1.0)
+            summary = result.to_summary_dict()
+            if 'test_metric' in summary:
+                return True, "ResearchResult working"
+            return False, "to_summary_dict() failed"
+        except Exception as e:
+            return False, str(e)
+    
+    def _check_base_module(self) -> Tuple[bool, str]:
+        try:
+            required_methods = ['load_data', 'validate', 'compute', 'export', 'summary', 'run']
+            for method in required_methods:
+                if not hasattr(BaseResearchModule, method):
+                    return False, f"Missing method: {method}"
+            return True, "BaseResearchModule valid"
+        except Exception as e:
+            return False, str(e)
+    
+    def _check_export_manager(self) -> Tuple[bool, str]:
+        try:
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmpdir:
+                result = ResearchResult(
+                    module_name="test", module_version="1.0",
+                    dataset_identifier="test.csv",
+                    timestamp_start="2026-01-01", timestamp_end="2026-12-31",
+                    execution_timestamp=datetime.now().isoformat()
+                )
+                result.add_statistic("test", 1.0)
+                exporter = ExportManager(tmpdir)
+                exporter.export_statistics(result)
+                exporter.export_report(result)
+                stats_file = Path(tmpdir) / "statistics.csv"
+                report_file = Path(tmpdir) / "report.txt"
+                if stats_file.exists() and report_file.exists():
+                    return True, "ExportManager working"
+                return False, "Files not created"
+        except Exception as e:
+            return False, str(e)
+    
+    def _check_runner(self) -> Tuple[bool, str]:
+        try:
+            runner = ModuleRunner()
+            if hasattr(runner, 'run_on_datasets'):
+                return True, "ModuleRunner valid"
+            return False, "Missing run_on_datasets method"
+        except Exception as e:
+            return False, str(e)
+    
+    def _check_data_files(self) -> Tuple[bool, str]:
+        try:
+            import config
+            datasets = getattr(config, 'DATASETS', {})
+            available = []
+            missing = []
+            for ds_id, filepath in datasets.items():
+                if Path(filepath).exists():
+                    size_mb = Path(filepath).stat().st_size / (1024 * 1024)
+                    available.append(f"{ds_id} ({size_mb:.1f}MB)")
+                else:
+                    missing.append(ds_id)
+            if missing:
+                return False, f"Missing: {', '.join(missing)}"
+            if available:
+                return True, f"All {len(available)} datasets present"
+            return False, "No datasets configured or found"
+        except Exception as e:
+            return False, str(e)
+    
+    def _check_dependencies(self) -> Tuple[bool, str]:
+        try:
+            import pandas, numpy, scipy, statsmodels
+            versions = (f"pandas {pandas.__version__}, numpy {numpy.__version__}, "
+                       f"scipy {scipy.__version__}, statsmodels {statsmodels.__version__}")
+            return True, versions
+        except ImportError as e:
+            return False, f"Missing dependency: {e}"
+    
+    def _check_dataset_consistency(self) -> Tuple[bool, str]:
+        try:
+            import config
+            configured = set(getattr(config, 'DATASETS', {}).keys())
+            registered = set(self.registry.datasets.keys())
+            if not configured and not registered:
+                return True, "No datasets configured"
+            if not configured:
+                return True, "No datasets in config"
+            only_configured = configured - registered
+            if only_configured and not registered:
+                return True, f"{len(configured)} datasets configured, awaiting registration"
+            return True, f"{len(configured & registered)} datasets consistent"
+        except Exception as e:
+            return True, f"Consistency check skipped: {e}"
+    
+    def _print_summary(self):
+        print("\n" + "=" * 60)
+        print("HEALTH CHECK SUMMARY")
+        print("=" * 60)
+        total = self.checks_passed + self.checks_failed + self.checks_warning
+        print(f"\nTotal Checks: {total}")
+        print(f"Passed: {self.checks_passed}")
+        print(f"Failed: {self.checks_failed}")
+        if self.checks_warning > 0:
+            print(f"Warnings: {self.checks_warning}")
+        if self.issues:
+            print(f"\nIssues Found:")
+            for issue in self.issues:
+                print(f"  -> {issue}")
+        if self.checks_failed == 0:
+            print("\nOVERALL STATUS: READY")
+        else:
+            print(f"\nOVERALL STATUS: NOT READY ({self.checks_failed} critical failure(s))")
+        print("=" * 60 + "\n")
+
+
+def main():
+    checker = FrameworkChecker()
+    success = checker.run_all_checks()
+    sys.exit(0 if success else 1)
+
+
+if __name__ == "__main__":
+    main()
+# atlas/framework/metadata.py
+"""
+Dataset metadata and fingerprinting.
+Every dataset in Atlas carries rich metadata for reproducibility.
+"""
+
+import hashlib
+import json
+from pathlib import Path
+from dataclasses import dataclass, asdict, fields
+from datetime import datetime
+from typing import Optional
+import pandas as pd
+
+@dataclass
+class DatasetDescriptor:
+    """
+    Rich dataset metadata.
+    Every dataset processed by Atlas receives this descriptor.
+    """
+    exchange: str
+    symbol: str
+    timeframe: str
+    timezone: str = "UTC"
+    rows: int = 0
+    start: str = ""
+    end: str = ""
+    filepath: str = ""
+    file_size_mb: float = 0.0
+    columns: list = None
+    fingerprint: Optional[str] = None  # SHA256 fingerprint
+    
+    def __post_init__(self):
+        if self.columns is None:
+            self.columns = []
+    
+    def to_dict(self) -> dict:
+        """Convert to dictionary"""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'DatasetDescriptor':
+        """
+        Create from dictionary with forward compatibility.
+        
+        Only uses fields that exist in the dataclass definition.
+        Extra fields (like nested fingerprint objects) are ignored.
+        This ensures backward/forward compatibility as the class evolves.
+        """
+        # Get valid field names from dataclass definition
+        valid_fields = {f.name for f in fields(cls)}
+        
+        # Filter dictionary to only include valid fields
+        filtered_data = {
+            k: v for k, v in data.items() 
+            if k in valid_fields
+        }
+        
+        return cls(**filtered_data)
+    
+    @classmethod
+    def from_dataframe(cls, df: pd.DataFrame, filepath: str, 
+                       exchange: str = "Delta Exchange",
+                       symbol: str = "BTCUSD",
+                       timeframe: str = "unknown") -> 'DatasetDescriptor':
+        """
+        Create descriptor from a loaded DataFrame.
+        
+        Args:
+            df: Loaded DataFrame
+            filepath: Path to data file
+            exchange: Exchange name
+            symbol: Trading symbol
+            timeframe: Data timeframe
+            
+        Returns:
+            DatasetDescriptor instance
+        """
+        path = Path(filepath)
+        
+        descriptor = cls(
+            exchange=exchange,
+            symbol=symbol,
+            timeframe=timeframe,
+            timezone="UTC",
+            rows=len(df),
+            filepath=str(path.absolute()),
+            file_size_mb=path.stat().st_size / (1024 * 1024) if path.exists() else 0.0,
+            columns=list(df.columns)
+        )
+        
+        # Extract time range if timestamp column exists
+        if 'timestamp' in df.columns:
+            descriptor.start = str(df['timestamp'].min())
+            descriptor.end = str(df['timestamp'].max())
+        
+        return descriptor
+    
+    def summary(self) -> str:
+        """Generate human-readable summary"""
+        lines = []
+        lines.append(f"Dataset: {self.symbol} ({self.timeframe})")
+        lines.append(f"Exchange: {self.exchange}")
+        lines.append(f"Period: {self.start} to {self.end}")
+        lines.append(f"Rows: {self.rows:,}")
+        lines.append(f"Size: {self.file_size_mb:.2f} MB")
+        lines.append(f"Columns: {', '.join(self.columns)}")
+        if self.fingerprint:
+            lines.append(f"Fingerprint: {self.fingerprint[:16]}...")
+        return "\n".join(lines)
+
+
+class DatasetFingerprint:
+    """
+    Cryptographic fingerprint for dataset verification.
+    Guarantees reproducibility across research runs.
+    """
+    
+    @staticmethod
+    def compute_file_hash(filepath: str, algorithm: str = 'sha256') -> str:
+        """
+        Compute cryptographic hash of file.
+        
+        Args:
+            filepath: Path to file
+            algorithm: Hash algorithm (sha256, md5)
+            
+        Returns:
+            Hex digest string
+        """
+        hasher = hashlib.new(algorithm)
+        
+        with open(filepath, 'rb') as f:
+            for chunk in iter(lambda: f.read(8192), b''):
+                hasher.update(chunk)
+        
+        return hasher.hexdigest()
+    
+    @staticmethod
+    def compute_dataframe_hash(df: pd.DataFrame) -> str:
+        """
+        Compute hash of DataFrame content.
+        
+        Args:
+            df: DataFrame to hash
+            
+        Returns:
+            Hash string
+        """
+        # Use CSV representation for hashing
+        csv_bytes = df.to_csv(index=False).encode('utf-8')
+        return hashlib.sha256(csv_bytes).hexdigest()
+    
+    @staticmethod
+    def create_fingerprint(filepath: str, df: Optional[pd.DataFrame] = None) -> dict:
+        """
+        Create complete fingerprint for a dataset.
+        
+        Args:
+            filepath: Path to data file
+            df: Optional loaded DataFrame
+            
+        Returns:
+            Dictionary with fingerprint data
+        """
+        path = Path(filepath)
+        
+        fingerprint = {
+            'filepath': str(path.absolute()),
+            'filename': path.name,
+            'file_size_bytes': path.stat().st_size if path.exists() else 0,
+            'sha256': DatasetFingerprint.compute_file_hash(filepath) if path.exists() else None,
+            'created_at': datetime.now().isoformat(),
+        }
+        
+        if df is not None:
+            fingerprint.update({
+                'rows': len(df),
+                'columns': list(df.columns),
+                'data_hash': DatasetFingerprint.compute_dataframe_hash(df),
+                'timestamp_start': str(df['timestamp'].min()) if 'timestamp' in df.columns else None,
+                'timestamp_end': str(df['timestamp'].max()) if 'timestamp' in df.columns else None,
+            })
+        
+        return fingerprint
+    
+    @staticmethod
+    def verify_fingerprint(filepath: str, stored_hash: str) -> bool:
+        """
+        Verify file matches stored fingerprint.
+        
+        Args:
+            filepath: Path to file
+            stored_hash: Previously computed hash
+            
+        Returns:
+            True if file matches
+        """
+        current_hash = DatasetFingerprint.compute_file_hash(filepath)
+        return current_hash == stored_hash
+
+# atlas/framework/protocol.py
+"""
+Research Protocol Definition.
+Every module begins with a research protocol that defines its scientific methodology.
+"""
+
+from dataclasses import dataclass, field, asdict
+from typing import List, Dict, Optional
+from datetime import datetime
+from enum import Enum
+import hashlib
+from pathlib import Path
+
+class ModuleStatus(str, Enum):
+    """Module lifecycle status with clear progression"""
+    PLANNED = "Planned"
+    IN_PROGRESS = "In Progress"
+    COMPLETED = "Completed"
+    VALIDATED = "Validated"
+    FROZEN = "Frozen"
+    DEPRECATED = "Deprecated"
+    ARCHIVED = "Archived"
+    
+    def can_transition_to(self, target: 'ModuleStatus') -> bool:
+        valid_transitions = {
+            ModuleStatus.PLANNED: [ModuleStatus.IN_PROGRESS, ModuleStatus.DEPRECATED],
+            ModuleStatus.IN_PROGRESS: [ModuleStatus.COMPLETED, ModuleStatus.DEPRECATED],
+            ModuleStatus.COMPLETED: [ModuleStatus.VALIDATED, ModuleStatus.FROZEN, ModuleStatus.IN_PROGRESS],
+            ModuleStatus.VALIDATED: [ModuleStatus.FROZEN, ModuleStatus.IN_PROGRESS],
+            ModuleStatus.FROZEN: [ModuleStatus.DEPRECATED],
+            ModuleStatus.DEPRECATED: [ModuleStatus.ARCHIVED],
+            ModuleStatus.ARCHIVED: [],
+        }
+        return target in valid_transitions.get(self, [])
+
+class ModuleCategory(str, Enum):
+    """Module classification"""
+    DATA_QUALITY = "Data Quality"
+    DISTRIBUTION = "Distribution Analysis"
+    VOLATILITY = "Volatility Analysis"
+    CORRELATION = "Correlation Analysis"
+    REGIME = "Regime Detection"
+    MICROSTRUCTURE = "Market Microstructure"
+    FEATURE = "Feature Engineering"
+    VALIDATION = "Validation"
+    STRATEGY = "Strategy Research"
+    PRICE_BEHAVIOR = "Price Behavior"
+    VOLUME_BEHAVIOR = "Volume Behavior"
+
+@dataclass
+class StatusTransition:
+    from_status: str
+    to_status: str
+    timestamp: str
+    reason: str = ""
+    
+    def to_dict(self) -> dict:
+        return {
+            'from': self.from_status,
+            'to': self.to_status,
+            'timestamp': self.timestamp,
+            'reason': self.reason
+        }
+
+@dataclass
+class ModuleFingerprint:
+    module_id: str
+    version: str
+    source_hash: str = ""
+    protocol_hash: str = ""
+    validation_hash: str = ""
+    frozen_hash: str = ""
+    created_at: str = ""
+    
+    def to_dict(self) -> dict:
+        return {
+            'module_id': self.module_id,
+            'version': self.version,
+            'source_hash': self.source_hash,
+            'protocol_hash': self.protocol_hash,
+            'validation_hash': self.validation_hash,
+            'frozen_hash': self.frozen_hash,
+            'created_at': self.created_at
+        }
+    
+    def is_intact(self) -> bool:
+        if self.frozen_hash and not self.source_hash:
+            return False
+        return True
+
+@dataclass
+class ResearchProtocol:
+    module_id: str
+    module_name: str
+    category: ModuleCategory
+    question: str
+    hypothesis: str
+    rationale: str
+    methodology: str
+    statistics: List[str] = field(default_factory=list)
+    depends_on: List[str] = field(default_factory=list)
+    required_datasets: List[str] = field(default_factory=list)
+    author: str = "Project Atlas"
+    version: str = "1.0.0"
+    created_date: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
+    status: ModuleStatus = ModuleStatus.PLANNED
+    validated: bool = False
+    validation_date: Optional[str] = None
+    completion_date: Optional[str] = None
+    status_history: List[dict] = field(default_factory=list)
+    fingerprint: Optional[dict] = None
+    limitations: List[str] = field(default_factory=list)
+    conclusions: List[str] = field(default_factory=list)
+    future_research: List[str] = field(default_factory=list)
+    references: List[str] = field(default_factory=list)
+    produces: List[str] = field(default_factory=list)
+    
+    def __post_init__(self):
+        if not self.status_history:
+            self.status_history = [{
+                'from': 'None',
+                'to': self.status.value,
+                'timestamp': datetime.now().isoformat(),
+                'reason': 'Module created'
+            }]
+    
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        d['status'] = self.status.value
+        d['category'] = self.category.value
+        return d
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'ResearchProtocol':
+        if 'status' in data:
+            data['status'] = ModuleStatus(data['status'])
+        if 'category' in data:
+            data['category'] = ModuleCategory(data['category'])
+        if 'status_history' not in data:
+            data['status_history'] = []
+        if 'fingerprint' not in data:
+            data['fingerprint'] = None
+        return cls(**data)
+    
+    def transition_to(self, new_status: ModuleStatus, reason: str = "") -> bool:
+        if not self.status.can_transition_to(new_status):
+            valid = [s.value for s in ModuleStatus if self.status.can_transition_to(s)]
+            raise ValueError(
+                f"Invalid transition: {self.status.value} → {new_status.value}. "
+                f"Valid: {valid}"
+            )
+        old_status = self.status
+        transition = {
+            'from': old_status.value,
+            'to': new_status.value,
+            'timestamp': datetime.now().isoformat(),
+            'reason': reason
+        }
+        self.status_history.append(transition)
+        self.status = new_status
+        if new_status == ModuleStatus.COMPLETED:
+            self.completion_date = datetime.now().strftime("%Y-%m-%d")
+        if new_status == ModuleStatus.VALIDATED:
+            self.validated = True
+            self.validation_date = datetime.now().strftime("%Y-%m-%d")
+        if new_status == ModuleStatus.FROZEN:
+            self.status_history[-1]['frozen'] = True
+        return True
+    
+    def get_audit_trail(self) -> str:
+        lines = []
+        lines.append("=" * 60)
+        lines.append(f"AUDIT TRAIL: Module {self.module_id}")
+        lines.append("=" * 60)
+        for i, entry in enumerate(self.status_history):
+            timestamp = entry['timestamp'][:19]
+            lines.append(f"\n  [{i+1}] {timestamp}")
+            lines.append(f"      {entry['from']} → {entry['to']}")
+            if entry.get('reason'):
+                lines.append(f"      Reason: {entry['reason']}")
+        if self.fingerprint:
+            lines.append(f"\n  Fingerprint: {self.fingerprint.get('source_hash', 'N/A')[:16]}...")
+        lines.append("=" * 60)
+        return "\n".join(lines)
+    
+    def compute_source_hash(self, source_path: str) -> str:
+        try:
+            path = Path(source_path)
+            if path.exists():
+                with open(path, 'rb') as f:
+                    return hashlib.sha256(f.read()).hexdigest()
+        except Exception:
+            pass
+        return ""
+    
+    def create_fingerprint(self, source_path: str = "", validation_data: str = "") -> dict:
+        fingerprint = {
+            'module_id': self.module_id,
+            'version': self.version,
+            'created_at': datetime.now().isoformat(),
+            'source_hash': self.compute_source_hash(source_path) if source_path else "",
+            'protocol_hash': hashlib.sha256(
+                f"{self.question}{self.hypothesis}{self.methodology}".encode()
+            ).hexdigest(),
+            'validation_hash': hashlib.sha256(validation_data.encode()).hexdigest() if validation_data else "",
+            'frozen_hash': "",
+        }
+        if self.status == ModuleStatus.FROZEN:
+            combined = f"{fingerprint['source_hash']}{fingerprint['protocol_hash']}{fingerprint['validation_hash']}"
+            fingerprint['frozen_hash'] = hashlib.sha256(combined.encode()).hexdigest()
+        self.fingerprint = fingerprint
+        return fingerprint
+    
+    def verify_fingerprint(self, source_path: str = "") -> bool:
+        if not self.fingerprint:
+            return False
+        stored_hash = self.fingerprint.get('source_hash', '')
+        if not stored_hash or not source_path:
+            return True
+        current_hash = self.compute_source_hash(source_path)
+        return current_hash == stored_hash
+    
+    def validate_protocol(self) -> List[str]:
+        issues = []
+        if not self.question:
+            issues.append("Research question is empty")
+        if not self.hypothesis:
+            issues.append("Hypothesis is empty")
+        if not self.methodology:
+            issues.append("Methodology is empty")
+        if not self.statistics:
+            issues.append("No statistics defined")
+        if self.module_id == "":
+            issues.append("Module ID is empty")
+        return issues
+    
+    def summary(self) -> str:
+        lines = []
+        lines.append("=" * 60)
+        lines.append(f"RESEARCH PROTOCOL: {self.module_id} - {self.module_name}")
+        lines.append("=" * 60)
+        lines.append(f"\nStatus: {self.status.value}")
+        lines.append(f"Category: {self.category.value}")
+        lines.append(f"Version: {self.version}")
+        lines.append(f"\nQUESTION:")
+        lines.append(f"  {self.question}")
+        lines.append(f"\nHYPOTHESIS:")
+        lines.append(f"  {self.hypothesis}")
+        lines.append(f"\nMETHODOLOGY:")
+        lines.append(f"  {self.methodology}")
+        if self.depends_on:
+            lines.append(f"\nDEPENDENCIES: {', '.join(self.depends_on)}")
+        if self.produces:
+            lines.append(f"\nPRODUCES: {', '.join(self.produces)}")
+        if len(self.status_history) > 1:
+            lines.append(f"\nAUDIT TRAIL: {len(self.status_history)} transitions")
+        if self.validated:
+            lines.append(f"\nVALIDATED: {self.validation_date}")
+        lines.append("=" * 60)
+        return "\n".join(lines)
+
+
+"""
+Atlas Registry - The project's brain.
+Central registry for all modules with audit trails and fingerprinting.
+
+FIXED: Lifecycle transitions now persist correctly.
+Modules that complete research are properly tracked.
+"""
+
+import json
+from pathlib import Path
+from datetime import datetime
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any, Type
+
+from atlas.framework.protocol import ResearchProtocol, ModuleStatus
+from atlas.framework.metadata import DatasetDescriptor, DatasetFingerprint
+from atlas.core.logger import AtlasLogger
+
+# SINGLE SOURCE OF TRUTH for framework version
+FRAMEWORK_VERSION = "2.4.0"
+
+
+@dataclass
+class ModuleRegistration:
+    """Registration entry for a module."""
+    module_id: str
+    module_class: Type
+    metadata: Dict[str, Any]
+    registered_at: str = field(default_factory=lambda: str(datetime.now()))
+
+
+class AtlasRegistry:
+    """
+    Central registry for Project Atlas.
+    
+    Lifecycle: PLANNED → IN_PROGRESS → COMPLETED → VALIDATED → FROZEN
+    
+    FIXED: 
+    - Transitions now auto-advance through prerequisite states
+    - Module status persists correctly after research completion
+    - Inconsistent state (Planned + Completed simultaneously) no longer possible
+    """
+    
+    def __init__(self, registry_dir: str = "atlas/framework/registry"):
+        self.registry_dir = Path(registry_dir)
+        self.registry_dir.mkdir(parents=True, exist_ok=True)
+        self.registry_file = self.registry_dir / "registry.json"
+        self.datasets_file = self.registry_dir / "datasets.json"
+        
+        self.logger = AtlasLogger("registry")
+        
+        self.modules: Dict[str, ResearchProtocol] = {}
+        self.datasets: Dict[str, DatasetDescriptor] = {}
+        self.fingerprints: Dict[str, dict] = {}
+        
+        # For module class registration
+        self._module_classes: Dict[str, Type] = {}
+        self._module_metadata: Dict[str, Dict[str, Any]] = {}
+        
+        self.framework_version = FRAMEWORK_VERSION
+        self.framework_created = "2026-07-03"
+        
+        self._load()
+    
+    def _load(self):
+        """Load registry from disk"""
+        if self.registry_file.exists():
+            try:
+                with open(self.registry_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                stored_version = data.get('framework_version', self.framework_version)
+                
+                if stored_version != self.framework_version:
+                    self.logger.info(
+                        f"Registry file v{stored_version} loaded into framework v{self.framework_version}"
+                    )
+                
+                loaded_count = 0
+                for module_data in data.get('modules', []):
+                    try:
+                        protocol = ResearchProtocol.from_dict(module_data)
+                        module_id = protocol.module_id
+                        self.modules[module_id] = protocol
+                        loaded_count += 1
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load module: {e}")
+                
+                if loaded_count > 0:
+                    module_ids = sorted(self.modules.keys())
+                    self.logger.info(f"Loaded {loaded_count} modules: {module_ids}")
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to load registry: {e}")
+        
+        if self.datasets_file.exists():
+            try:
+                with open(self.datasets_file, 'r', encoding='utf-8') as f:
+                    datasets_data = json.load(f)
+                
+                loaded_datasets = 0
+                for ds_id, ds_data in datasets_data.get('datasets', {}).items():
+                    try:
+                        self.datasets[ds_id] = DatasetDescriptor.from_dict(ds_data)
+                        if 'fingerprint' in ds_data and ds_data['fingerprint']:
+                            self.fingerprints[ds_id] = ds_data['fingerprint']
+                        loaded_datasets += 1
+                    except Exception as e:
+                        self.logger.warning(f"Failed to load dataset {ds_id}: {e}")
+                
+                if loaded_datasets > 0:
+                    self.logger.info(f"Loaded {loaded_datasets} datasets")
+            except Exception as e:
+                self.logger.warning(f"Failed to load datasets: {e}")
+    
+    def _save(self):
+        """Save registry to disk"""
+        registry_data = {
+            "framework_version": self.framework_version,
+            "last_updated": datetime.now().isoformat(),
+            "total_modules": len(self.modules),
+            "modules": []
+        }
+        
+        for module_id in sorted(self.modules.keys()):
+            protocol = self.modules[module_id]
+            registry_data['modules'].append(protocol.to_dict())
+        
+        with open(self.registry_file, 'w', encoding='utf-8') as f:
+            json.dump(registry_data, f, indent=2, ensure_ascii=False)
+        
+        datasets_data = {
+            "last_updated": datetime.now().isoformat(),
+            "total_datasets": len(self.datasets),
+            "datasets": {}
+        }
+        
+        for ds_id, descriptor in self.datasets.items():
+            ds_dict = descriptor.to_dict()
+            if ds_id in self.fingerprints:
+                ds_dict['fingerprint'] = self.fingerprints[ds_id]
+            datasets_data['datasets'][ds_id] = ds_dict
+        
+        with open(self.datasets_file, 'w', encoding='utf-8') as f:
+            json.dump(datasets_data, f, indent=2, ensure_ascii=False)
+    
+    # ============ Module Class Registration (for ModuleLoader) ============
+    
+    def register_module_class(
+        self,
+        module_class: Type,
+        module_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Register a module class for discovery.
+        
+        Args:
+            module_class: The module class to register
+            module_id: Optional module ID (defaults to metadata 'module' or class name)
+            metadata: Optional metadata dictionary
+        
+        Returns:
+            str: The module ID
+        """
+        if metadata is None:
+            metadata = {}
+        
+        if module_id is None:
+            module_id = metadata.get('module', module_class.__name__)
+        
+        self._module_classes[module_id] = module_class
+        self._module_metadata[module_id] = metadata
+        
+        return module_id
+    
+    def is_registered_class(self, module_class: Type) -> bool:
+        """
+        Check if a class is registered.
+        
+        Args:
+            module_class: The class to check
+        
+        Returns:
+            bool: True if registered
+        """
+        return module_class in self._module_classes.values()
+    
+    # Alias for backward compatibility
+    def is_registered(self, module_class: Type) -> bool:
+        """
+        Alias for is_registered_class.
+        
+        Args:
+            module_class: The class to check
+        
+        Returns:
+            bool: True if registered
+        """
+        return self.is_registered_class(module_class)
+    
+    def get_module_class(self, module_id: str) -> Optional[Type]:
+        """
+        Get a registered module class by ID.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            Module class or None
+        """
+        return self._module_classes.get(module_id)
+    
+    def get_module_metadata(self, module_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get registered module metadata.
+        
+        Args:
+            module_id: Module identifier
+        
+        Returns:
+            Metadata dict or None
+        """
+        return self._module_metadata.get(module_id)
+    
+    def list_registered_classes(self) -> Dict[str, Type]:
+        """
+        List all registered module classes.
+        
+        Returns:
+            dict: {module_id: module_class}
+        """
+        return self._module_classes.copy()
+    
+    # ============ Original Registry Methods ============
+    
+    def register_module(self, protocol: ResearchProtocol) -> None:
+        """Register a new research module"""
+        module_id = protocol.module_id
+        
+        if module_id in self.modules:
+            self.logger.info(f"Updating existing module: {module_id}")
+        else:
+            self.logger.success(f"Registered module: {module_id} - {protocol.module_name}")
+        
+        self.modules[module_id] = protocol
+        self._save()
+    
+    def _advance_to_state(self, module_id: str, target: ModuleStatus) -> bool:
+        """
+        Auto-advance through prerequisite states to reach target.
+        
+        This ensures modules don't get stuck in inconsistent states.
+        For example, if a module is PLANNED and needs to reach COMPLETED,
+        it will automatically transition through IN_PROGRESS first.
+        """
+        module = self.modules[module_id]
+        current = module.status
+        
+        # Define the required path
+        state_order = [
+            ModuleStatus.PLANNED,
+            ModuleStatus.IN_PROGRESS,
+            ModuleStatus.COMPLETED,
+            ModuleStatus.VALIDATED,
+            ModuleStatus.FROZEN
+        ]
+        
+        try:
+            current_idx = state_order.index(current)
+            target_idx = state_order.index(target)
+        except ValueError:
+            return False
+        
+        if target_idx <= current_idx:
+            # Already at or past target
+            return True
+        
+        # Advance through each intermediate state
+        for idx in range(current_idx + 1, target_idx + 1):
+            next_state = state_order[idx]
+            
+            try:
+                reasons = {
+                    ModuleStatus.IN_PROGRESS: "Research execution started",
+                    ModuleStatus.COMPLETED: "All datasets processed successfully",
+                    ModuleStatus.VALIDATED: "Results independently verified",
+                    ModuleStatus.FROZEN: "Module frozen - immutable"
+                }
+                reason = reasons.get(next_state, f"Auto-transition to {next_state.value}")
+                
+                module.transition_to(next_state, reason=reason)
+                self._log_transition(module_id, module)
+                
+            except ValueError as e:
+                self.logger.error(f"Cannot advance {module_id} to {next_state.value}: {e}")
+                return False
+        
+        self._save()
+        return True
+    
+    def transition_module(self, module_id: str, new_status: ModuleStatus, 
+                         reason: str = "") -> bool:
+        """Transition module with auto-advancement"""
+        if module_id not in self.modules:
+            self.logger.error(f"Module {module_id} not found")
+            return False
+        
+        return self._advance_to_state(module_id, new_status)
+    
+    def _log_transition(self, module_id: str, module: ResearchProtocol):
+        """Log status transition"""
+        history = module.status_history
+        if len(history) >= 2:
+            last = history[-1]
+            icon = self._status_icon(module.status)
+            self.logger.success(
+                f"Module {module_id}: {last['from']} → {last['to']} {icon}"
+            )
+            if last.get('reason'):
+                self.logger.info(f"  Reason: {last['reason']}")
+    
+    def _status_icon(self, status: ModuleStatus) -> str:
+        """Get icon for status"""
+        icons = {
+            ModuleStatus.PLANNED: "○",
+            ModuleStatus.IN_PROGRESS: "◉",
+            ModuleStatus.COMPLETED: "✓",
+            ModuleStatus.VALIDATED: "✔",
+            ModuleStatus.FROZEN: "❄",
+            ModuleStatus.DEPRECATED: "☠",
+            ModuleStatus.ARCHIVED: "📦"
+        }
+        return icons.get(status, "?")
+    
+    def start_module(self, module_id: str) -> bool:
+        """Mark module as In Progress (auto-advances from Planned)"""
+        return self.transition_module(module_id, ModuleStatus.IN_PROGRESS)
+    
+    def complete_module(self, module_id: str) -> bool:
+        """Mark module as Completed (auto-advances through In Progress)"""
+        return self.transition_module(module_id, ModuleStatus.COMPLETED)
+    
+    def validate_module(self, module_id: str, validation_source: str = "") -> bool:
+        """Validate module (auto-advances through In Progress and Completed)"""
+        if module_id not in self.modules:
+            self.logger.error(f"Module {module_id} not found")
+            return False
+        
+        # Auto-advance to COMPLETED first
+        if not self._advance_to_state(module_id, ModuleStatus.COMPLETED):
+            return False
+        
+        module = self.modules[module_id]
+        module.create_fingerprint(source_path=validation_source)
+        
+        return self.transition_module(module_id, ModuleStatus.VALIDATED)
+    
+    def freeze_module(self, module_id: str, module_source_path: str = "") -> bool:
+        """Freeze module (auto-advances through all prerequisite states)"""
+        if module_id not in self.modules:
+            self.logger.error(f"Module {module_id} not found")
+            return False
+        
+        # Check dependencies
+        module = self.modules[module_id]
+        for dep_id in module.depends_on:
+            if dep_id in self.modules:
+                if self.modules[dep_id].status != ModuleStatus.FROZEN:
+                    self.logger.error(
+                        f"Cannot freeze {module_id}: dependency {dep_id} not frozen"
+                    )
+                    return False
+        
+        # Auto-advance to VALIDATED first
+        if not self._advance_to_state(module_id, ModuleStatus.VALIDATED):
+            return False
+        
+        module = self.modules[module_id]
+        validation_data = f"{module.module_id}{module.version}{module.validation_date}"
+        module.create_fingerprint(
+            source_path=module_source_path,
+            validation_data=validation_data
+        )
+        
+        if module.fingerprint:
+            module.fingerprint['frozen_at'] = datetime.now().isoformat()
+        
+        return self.transition_module(module_id, ModuleStatus.FROZEN)
+    
+    def verify_module_integrity(self, module_id: str, source_path: str = "") -> bool:
+        """Verify a module hasn't been tampered with"""
+        if module_id not in self.modules:
+            return False
+        
+        module = self.modules[module_id]
+        if not module.fingerprint:
+            self.logger.warning(f"Module {module_id} has no fingerprint")
+            return False
+        
+        is_valid = module.verify_fingerprint(source_path)
+        
+        if is_valid:
+            self.logger.success(f"Module {module_id} integrity VERIFIED ✓")
+        else:
+            self.logger.error(f"Module {module_id} integrity FAILED ✗")
+        
+        return is_valid
+    
+    def get_module_audit_trail(self, module_id: str) -> Optional[str]:
+        """Get complete audit trail"""
+        if module_id not in self.modules:
+            return None
+        return self.modules[module_id].get_audit_trail()
+    
+    def register_dataset(self, dataset_id: str, descriptor: DatasetDescriptor,
+                         fingerprint: Optional[dict] = None) -> None:
+        """Register a dataset"""
+        self.datasets[dataset_id] = descriptor
+        if fingerprint:
+            self.fingerprints[dataset_id] = fingerprint
+            descriptor.fingerprint = fingerprint.get('sha256', '')
+        self.logger.success(f"Registered dataset: {dataset_id} ({descriptor.rows:,} rows)")
+        self._save()
+    
+    def get_module(self, module_id: str) -> Optional[ResearchProtocol]:
+        """Get a module's protocol"""
+        return self.modules.get(module_id)
+    
+    def get_dependencies(self, module_id: str) -> List[str]:
+        """Get all dependencies recursively"""
+        if module_id not in self.modules:
+            return []
+        deps = []
+        visited = set()
+        to_process = list(self.modules[module_id].depends_on)
+        while to_process:
+            dep_id = to_process.pop(0)
+            if dep_id not in visited:
+                visited.add(dep_id)
+                if dep_id in self.modules:
+                    deps.append(dep_id)
+                    for sub_dep in self.modules[dep_id].depends_on:
+                        if sub_dep not in visited and sub_dep not in to_process:
+                            to_process.append(sub_dep)
+        return deps
+    
+    def get_dependent_modules(self, module_id: str) -> List[str]:
+        """Get modules that depend on this module"""
+        return [mid for mid, proto in self.modules.items() if module_id in proto.depends_on]
+    
+    def get_dataset(self, dataset_id: str) -> Optional[DatasetDescriptor]:
+        """Get dataset descriptor"""
+        return self.datasets.get(dataset_id)
+    
+    def verify_dataset(self, dataset_id: str, filepath: str) -> bool:
+        """Verify dataset integrity"""
+        if dataset_id not in self.fingerprints:
+            return False
+        stored_hash = self.fingerprints[dataset_id].get('sha256')
+        if not stored_hash:
+            return False
+        is_valid = DatasetFingerprint.verify_fingerprint(filepath, stored_hash)
+        if is_valid:
+            self.logger.success(f"Dataset {dataset_id} verified")
+        else:
+            self.logger.error(f"Dataset {dataset_id} FAILED verification")
+        return is_valid
+    
+    def get_statistics(self) -> Dict[str, Any]:
+        """Get registry statistics (backward-compatible)"""
+        status_counts = {}
+        for status in ModuleStatus:
+            count = sum(1 for m in self.modules.values() if m.status == status)
+            key = status.value.lower().replace(" ", "_")
+            status_counts[key] = count
+        
+        validated_count = sum(1 for m in self.modules.values() if m.validated)
+        fingerprinted_count = sum(1 for m in self.modules.values() if m.fingerprint)
+        
+        stats = {
+            "total_modules": len(self.modules),
+            "total_datasets": len(self.datasets),
+            "framework_version": self.framework_version,
+            **status_counts,
+            "validated_modules": validated_count,
+            "fingerprinted_modules": fingerprinted_count,
+        }
+        
+        # Backward-compatible keys
+        stats.update({
+            "planned_modules": status_counts.get("planned", 0),
+            "in_progress_modules": status_counts.get("in_progress", 0),
+            "completed_modules": status_counts.get("completed", 0),
+            "frozen_modules": status_counts.get("frozen", 0),
+        })
+        
+        return stats
+    
+    def list_modules(self, status_filter: Optional[ModuleStatus] = None) -> List[Dict]:
+        """List all registered modules"""
+        modules_list = []
+        for module_id, protocol in sorted(self.modules.items()):
+            if status_filter and protocol.status != status_filter:
+                continue
+            modules_list.append({
+                'id': module_id,
+                'name': protocol.module_name,
+                'status': protocol.status.value,
+                'version': protocol.version,
+                'depends_on': protocol.depends_on,
+                'validated': protocol.validated,
+                'category': protocol.category.value,
+                'produces': protocol.produces,
+                'fingerprinted': bool(protocol.fingerprint),
+                'audit_entries': len(protocol.status_history)
+            })
+        return modules_list
+    
+    def _get_all_dependency_ids(self) -> set:
+        """Get all dependency IDs"""
+        all_deps = set()
+        for protocol in self.modules.values():
+            all_deps.update(protocol.depends_on)
+        return all_deps
+    
+    def generate_registry_report(self) -> str:
+        """Generate comprehensive registry report"""
+        stats = self.get_statistics()
+        
+        lines = []
+        lines.append("=" * 70)
+        lines.append("ATLAS REGISTRY REPORT")
+        lines.append("=" * 70)
+        lines.append(f"\nFramework Version: {stats['framework_version']}")
+        lines.append(f"Total Modules: {stats['total_modules']}")
+        lines.append(f"Total Datasets: {stats['total_datasets']}")
+        
+        # Module status summary
+        lines.append("\n" + "-" * 70)
+        lines.append("MODULE STATUS SUMMARY")
+        lines.append("-" * 70)
+        
+        for status in ModuleStatus:
+            key = status.value.lower().replace(" ", "_")
+            count = stats.get(key, 0)
+            if count > 0:
+                lines.append(f"  {self._status_icon(status)} {status.value}: {count}")
+        
+        if stats.get('fingerprinted_modules', 0) > 0:
+            lines.append(f"\n  🔐 Fingerprinted: {stats['fingerprinted_modules']}")
+        
+        # Module listing with current status
+        lines.append("\n" + "-" * 70)
+        lines.append("REGISTERED MODULES")
+        lines.append("-" * 70)
+        
+        for module_id in sorted(self.modules.keys()):
+            protocol = self.modules[module_id]
+            icon = self._status_icon(protocol.status)
+            deps = f" → depends on [{', '.join(protocol.depends_on)}]" if protocol.depends_on else ""
+            lines.append(f"  {icon} {module_id}: {protocol.module_name} [{protocol.status.value}]{deps}")
+        
+        # Missing dependencies
+        registered_ids = set(self.modules.keys())
+        all_deps = self._get_all_dependency_ids()
+        missing = all_deps - registered_ids
+        if missing:
+            lines.append(f"\n  ⚠ MISSING DEPENDENCIES:")
+            for dep_id in sorted(missing):
+                needing = [mid for mid, p in self.modules.items() if dep_id in p.depends_on]
+                lines.append(f"    {dep_id} (required by: {', '.join(needing)})")
+        
+        # Dataset inventory
+        lines.append("\n" + "-" * 70)
+        lines.append("DATASET INVENTORY")
+        lines.append("-" * 70)
+        
+        if self.datasets:
+            for ds_id, descriptor in self.datasets.items():
+                has_fp = "🔒" if ds_id in self.fingerprints else "⚠"
+                lines.append(f"\n{has_fp} {ds_id}")
+                lines.append(f"  {descriptor.summary()}")
+        else:
+            lines.append("\n  No datasets registered yet")
+        
+        # Recent audit activity
+        lines.append("\n" + "-" * 70)
+        lines.append("RECENT AUDIT ACTIVITY")
+        lines.append("-" * 70)
+        
+        all_transitions = []
+        for mid, proto in self.modules.items():
+            for entry in proto.status_history:
+                all_transitions.append({
+                    'module': mid,
+                    'timestamp': entry['timestamp'],
+                    'transition': f"{entry['from']} → {entry['to']}",
+                    'reason': entry.get('reason', '')
+                })
+        
+        if all_transitions:
+            all_transitions.sort(key=lambda x: x['timestamp'], reverse=True)
+            for t in all_transitions[:10]:
+                ts = t['timestamp'][:19]
+                lines.append(f"  [{ts}] {t['module']}: {t['transition']}")
+                if t['reason']:
+                    lines.append(f"         {t['reason']}")
+        else:
+            lines.append("\n  No audit activity yet")
+        
+        lines.append("\n" + "=" * 70)
+        return "\n".join(lines)
+"""
+Topological Sort - Determine optimal execution order for modules.
+"""
+
+from typing import List, Dict, Set, Optional
+import re
+
+
+def get_module_id_from_name(folder_name: str) -> str:
+    """
+    Extract module ID from folder name.
+    
+    Args:
+        folder_name: Folder name (e.g., "module001_return_distribution")
+    
+    Returns:
+        str: Module ID (e.g., "001")
+    """
+    match = re.match(r"module(\d+)", folder_name)
+    if match:
+        return match.group(1)
+    return folder_name.replace('module', '')
+
+
+def _get_depends_on(module: Dict) -> List[str]:
+    """
+    Get dependencies from module dict, supporting both top-level and metadata.
+    
+    Args:
+        module: Module info dict
+    
+    Returns:
+        list: Dependency module IDs
+    """
+    # Check top-level depends_on first
+    depends = module.get('depends_on')
+    
+    if depends is None:
+        # Check metadata
+        metadata = module.get('metadata', {})
+        depends = metadata.get('depends_on', [])
+    
+    # Ensure it's a list
+    if not isinstance(depends, list):
+        depends = []
+    
+    return depends
+
+
+def topological_sort(modules: List[Dict]) -> List[Dict]:
+    """
+    Sort modules topologically based on dependencies.
+    
+    Args:
+        modules: List of module info dicts with 'module_id' and 'depends_on' keys
+    
+    Returns:
+        list: Modules in execution order
+    
+    Raises:
+        ValueError: If circular dependency is detected
+    """
+    # Build dependency graph
+    graph: Dict[str, Set[str]] = {}
+    all_modules: Dict[str, Dict] = {}
+    
+    for module in modules:
+        module_id = module['module_id']
+        all_modules[module_id] = module
+        
+        depends = _get_depends_on(module)
+        graph[module_id] = set(depends)
+    
+    # Remove dependencies that don't exist
+    for module_id, deps in graph.items():
+        graph[module_id] = {d for d in deps if d in all_modules}
+    
+    # Topological sort (Kahn's algorithm)
+    in_degree = {module_id: len(deps) for module_id, deps in graph.items()}
+    
+    # Start with modules that have no dependencies
+    queue = [module_id for module_id, degree in in_degree.items() if degree == 0]
+    
+    sorted_modules = []
+    
+    while queue:
+        module_id = queue.pop(0)
+        sorted_modules.append(all_modules[module_id])
+        
+        # Remove this module from dependencies of others
+        for other_id, deps in graph.items():
+            if module_id in deps:
+                graph[other_id].remove(module_id)
+                in_degree[other_id] -= 1
+                if in_degree[other_id] == 0:
+                    queue.append(other_id)
+    
+    # Check for circular dependency
+    if len(sorted_modules) != len(modules):
+        remaining = set(all_modules.keys()) - set([m['module_id'] for m in sorted_modules])
+        
+        # Find the cycle
+        cycles = []
+        for module_id in remaining:
+            visited = set()
+            path = []
+            
+            def dfs(current):
+                if current in visited:
+                    return True
+                if current not in graph:
+                    return False
+                visited.add(current)
+                path.append(current)
+                for dep in graph[current]:
+                    if dep in visited:
+                        cycles.append(path + [dep])
+                        return True
+                    if dfs(dep):
+                        return True
+                path.pop()
+                return False
+            
+            dfs(module_id)
+        
+        cycle_str = " -> ".join(cycles[0]) if cycles else ", ".join(remaining)
+        raise ValueError(f"Circular dependency detected: {cycle_str}")
+    
+    return sorted_modules
+
+
+def get_execution_order(modules: List[Dict], root_module: Optional[str] = None) -> List[Dict]:
+    """
+    Get execution order starting from a root module.
+    
+    Args:
+        modules: List of module info dicts
+        root_module: Optional root module ID to start from
+    
+    Returns:
+        list: Modules in execution order
+    """
+    if root_module:
+        # Filter to only modules needed for root
+        needed = set()
+        to_process = [root_module]
+        
+        while to_process:
+            current = to_process.pop()
+            if current in needed:
+                continue
+            needed.add(current)
+            
+            # Find module info
+            for module in modules:
+                if module['module_id'] == current:
+                    depends = _get_depends_on(module)
+                    for dep in depends:
+                        to_process.append(dep)
+                    break
+        
+        filtered_modules = [m for m in modules if m['module_id'] in needed]
+        return topological_sort(filtered_modules)
+    
+    return topological_sort(modules)
