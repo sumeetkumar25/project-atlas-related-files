@@ -199,27 +199,56 @@ class ResearchRunner:
                     module = self.module_loader.instantiate_module(module_info)
                     
                     # ----------------------------------------------------
-                    # Inject dependency features if they exist
+                    # Inject dependency features / artifacts
                     # ----------------------------------------------------
                     if dependencies:
                         self.dependency_injector.log_dependency_summary(
                             dataset_name, module_id, dependencies
                         )
-                        
-                        feature_df = self.dependency_injector.build_feature_dataframe(
-                            dataset_name, dependencies
-                        )
-                        
-                        if feature_df is not None:
-                            module.set_dependency_features(feature_df)
+
+                        if module_id == "117":
+                            # Module 117 requires the original artifact dictionaries
+                            # from Modules 109, 114, 115, and 116.
+                            dependency_artifacts = {}
+
+                            for dep in dependencies:
+                                artifacts = self.artifact_store.get(
+                                    dataset_name,
+                                    dep
+                                )
+
+                                if not artifacts:
+                                    raise RuntimeError(
+                                        f"Module 117 dependency {dep} has no artifacts "
+                                        f"for dataset {dataset_name}"
+                                    )
+
+                                dependency_artifacts[dep] = artifacts
+
+                            module.set_dependency_artifacts(dependency_artifacts)
+
                             self.logger.info(
-                                f"    Injected {len(feature_df.columns)} "
-                                f"features from {len(dependencies)} modules"
+                                f"    Module 117 adapter received artifacts from "
+                                f"{len(dependency_artifacts)} dependencies"
                             )
+
                         else:
-                            self.logger.warning(
-                                f"    No features found for dependencies: {dependencies}"
+                            feature_df = self.dependency_injector.build_feature_dataframe(
+                                dataset_name,
+                                dependencies
                             )
+
+                            if feature_df is not None:
+                                module.set_dependency_features(feature_df)
+
+                                self.logger.info(
+                                    f"    Injected {len(feature_df.columns)} "
+                                    f"features from {len(dependencies)} modules"
+                                )
+                            else:
+                                self.logger.warning(
+                                    f"    No features found for dependencies: {dependencies}"
+                                )
                     
                     # ----------------------------------------------------
                     # Prepare module-specific market DataFrame
