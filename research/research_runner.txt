@@ -233,8 +233,9 @@ class ResearchRunner:
                             )
 
                         elif module_id == "118":
-                            # Module 118 consumes the feature-level KEEP list
-                            # produced by Module 117.
+                            # Module 118 consumes:
+                            #   - Module 117 "kept_features" to know WHICH features survived
+                            #   - Module 109 "features"     to obtain the ACTUAL feature values
                             dependency_artifacts = {}
 
                             for dep in dependencies:
@@ -251,50 +252,85 @@ class ResearchRunner:
 
                                 dependency_artifacts[dep] = artifacts
 
-                            kept_features = dependency_artifacts["117"].get(
-                                "kept_features"
+                            # ----------------------------------------------------
+                            # 117 tells us WHICH features survived
+                            # ----------------------------------------------------
+                            selected_features = []
+
+                            artifacts_117 = dependency_artifacts.get("117", {})
+
+                            kept_features = artifacts_117.get(
+                                "kept_features",
+                                []
                             )
 
-                            if kept_features is None:
-                                raise RuntimeError(
-                                    f"Module 118 could not find 'kept_features' "
-                                    f"from Module 117 for dataset {dataset_name}"
-                                )
-
-                            if not isinstance(kept_features, pd.DataFrame):
-                                raise RuntimeError(
-                                    f"Module 118 expected Module 117 'kept_features' "
-                                    f"to be a DataFrame, got "
-                                    f"{type(kept_features).__name__}"
-                                )
-
-                            if "feature" not in kept_features.columns:
-                                raise RuntimeError(
-                                    f"Module 117 'kept_features' is missing "
-                                    f"the 'feature' column for dataset "
-                                    f"{dataset_name}"
-                                )
-
-                            selected_features = (
-                                kept_features["feature"]
-                                .dropna()
-                                .astype(str)
-                                .tolist()
-                            )
+                            if kept_features is not None:
+                                if isinstance(kept_features, pd.DataFrame):
+                                    if "feature" in kept_features.columns:
+                                        selected_features = (
+                                            kept_features["feature"]
+                                            .dropna()
+                                            .astype(str)
+                                            .tolist()
+                                        )
+                                elif isinstance(kept_features, (list, tuple)):
+                                    selected_features = [
+                                        str(f) for f in kept_features
+                                    ]
 
                             if not selected_features:
                                 raise RuntimeError(
-                                    f"Module 117 produced zero KEEP features "
-                                    f"for dataset {dataset_name}; "
+                                    f"Module 118: Module 117 produced zero KEEP "
+                                    f"features for dataset {dataset_name}; "
                                     f"Module 118 cannot run."
                                 )
 
+                            # ----------------------------------------------------
+                            # 109 supplies the ACTUAL feature columns
+                            # ----------------------------------------------------
+                            artifacts_109 = dependency_artifacts.get("109", {})
+
+                            feature_df = artifacts_109.get("features")
+
+                            if feature_df is None:
+                                raise RuntimeError(
+                                    f"Module 118: Module 109 has no 'features' artifact "
+                                    f"for dataset {dataset_name}"
+                                )
+
+                            if not isinstance(feature_df, pd.DataFrame):
+                                raise RuntimeError(
+                                    f"Module 118: Module 109 'features' is not "
+                                    f"a DataFrame for dataset {dataset_name}"
+                                )
+
+                            missing = [
+                                f for f in selected_features
+                                if f not in feature_df.columns
+                            ]
+
+                            if missing:
+                                raise RuntimeError(
+                                    f"Module 118: selected features are missing from "
+                                    f"Module 109 feature data: {missing}"
+                                )
+
+                            selected_feature_df = feature_df[
+                                selected_features
+                            ].copy()
+
+                            # Pass the actual feature values into Module 118
+                            module.set_dependency_features(
+                                selected_feature_df
+                            )
+
+                            # Pass the KEEP list to the Module 118 engine
                             module.engine.selected_features = selected_features
 
                             self.logger.info(
-                                f"    Module 118 received "
+                                f"    Module 118 adapter received "
                                 f"{len(selected_features)} KEEP features "
-                                f"from Module 117"
+                                f"from Module 117 (values from Module 109)"
                             )
 
                         else:
