@@ -278,60 +278,73 @@ class ResearchRunner:
                                         str(f) for f in kept_features
                                     ]
 
+                            # NOTE: Zero KEEP features is a valid research conclusion.
+                            # Module 118 must still run to record the transformation
+                            # stage conclusion. Do NOT raise here.
                             if not selected_features:
-                                raise RuntimeError(
-                                    f"Module 118: Module 117 produced zero KEEP "
-                                    f"features for dataset {dataset_name}; "
-                                    f"Module 118 cannot run."
+                                self.logger.warning(
+                                    f"    Module 118 received zero KEEP features "
+                                    f"from Module 117 for dataset {dataset_name}. "
+                                    f"Proceeding with empty feature set."
                                 )
 
                             # ----------------------------------------------------
                             # 109 supplies the ACTUAL feature columns
+                            # (only if we have features to select)
                             # ----------------------------------------------------
-                            artifacts_109 = dependency_artifacts.get("109", {})
+                            if selected_features:
+                                artifacts_109 = dependency_artifacts.get("109", {})
 
-                            feature_df = artifacts_109.get("features")
+                                feature_df = artifacts_109.get("features")
 
-                            if feature_df is None:
-                                raise RuntimeError(
-                                    f"Module 118: Module 109 has no 'features' artifact "
-                                    f"for dataset {dataset_name}"
+                                if feature_df is None:
+                                    raise RuntimeError(
+                                        f"Module 118: Module 109 has no 'features' artifact "
+                                        f"for dataset {dataset_name}"
+                                    )
+
+                                if not isinstance(feature_df, pd.DataFrame):
+                                    raise RuntimeError(
+                                        f"Module 118: Module 109 'features' is not "
+                                        f"a DataFrame for dataset {dataset_name}"
+                                    )
+
+                                missing = [
+                                    f for f in selected_features
+                                    if f not in feature_df.columns
+                                ]
+
+                                if missing:
+                                    raise RuntimeError(
+                                        f"Module 118: selected features are missing from "
+                                        f"Module 109 feature data: {missing}"
+                                    )
+
+                                selected_feature_df = feature_df[
+                                    selected_features
+                                ].copy()
+
+                                # Pass the actual feature values into Module 118
+                                module.set_dependency_features(
+                                    selected_feature_df
                                 )
 
-                            if not isinstance(feature_df, pd.DataFrame):
-                                raise RuntimeError(
-                                    f"Module 118: Module 109 'features' is not "
-                                    f"a DataFrame for dataset {dataset_name}"
+                                self.logger.info(
+                                    f"    Module 118 adapter received "
+                                    f"{len(selected_features)} KEEP features "
+                                    f"from Module 117 (values from Module 109)"
+                                )
+                            else:
+                                # Empty feature selection — pass empty DataFrame
+                                module.set_dependency_features(pd.DataFrame())
+
+                                self.logger.info(
+                                    f"    Module 118 adapter received "
+                                    f"0 KEEP features from Module 117"
                                 )
 
-                            missing = [
-                                f for f in selected_features
-                                if f not in feature_df.columns
-                            ]
-
-                            if missing:
-                                raise RuntimeError(
-                                    f"Module 118: selected features are missing from "
-                                    f"Module 109 feature data: {missing}"
-                                )
-
-                            selected_feature_df = feature_df[
-                                selected_features
-                            ].copy()
-
-                            # Pass the actual feature values into Module 118
-                            module.set_dependency_features(
-                                selected_feature_df
-                            )
-
-                            # Pass the KEEP list to the Module 118 engine
+                            # Pass the KEEP list (possibly empty) to the engine
                             module.engine.selected_features = selected_features
-
-                            self.logger.info(
-                                f"    Module 118 adapter received "
-                                f"{len(selected_features)} KEEP features "
-                                f"from Module 117 (values from Module 109)"
-                            )
 
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
