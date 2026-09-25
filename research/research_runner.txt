@@ -600,6 +600,89 @@ class ResearchRunner:
                             # Pass actual feature values into Module 120
                             module.set_dependency_features(feature_df)
 
+                        elif module_id == "121":
+                            # Module 121 analyzes redundancy between the canonical
+                            # engineered features produced upstream by:
+                            #   100 -> trend_score
+                            #   102 -> compression_score
+                            #   035 -> hurst_exponent
+                            #   037 -> normalized_entropy
+
+                            dependency_artifacts = {}
+
+                            for dep in dependencies:
+                                artifacts = self.artifact_store.get(dataset_name, dep)
+
+                                if not artifacts:
+                                    raise RuntimeError(
+                                        f"Module 121 requires Module {dep} artifacts "
+                                        f"for dataset {dataset_name}"
+                                    )
+
+                                dependency_artifacts[dep] = artifacts
+
+                            required_features = {
+                                "100": "trend_score",
+                                "102": "compression_score",
+                                "035": "hurst_exponent",
+                                "037": "normalized_entropy",
+                            }
+
+                            feature_parts = []
+
+                            for dep, feature_name in required_features.items():
+                                artifacts = dependency_artifacts.get(dep)
+
+                                feature_df = artifacts.get("features") if artifacts else None
+
+                                if not isinstance(feature_df, pd.DataFrame):
+                                    raise RuntimeError(
+                                        f"Module 121 requires Module {dep} feature DataFrame "
+                                        f"for dataset {dataset_name}"
+                                    )
+
+                                if feature_name not in feature_df.columns:
+                                    raise RuntimeError(
+                                        f"Module 121 requires feature '{feature_name}' "
+                                        f"from Module {dep} for dataset {dataset_name}"
+                                    )
+
+                                feature_parts.append(
+                                    feature_df[[feature_name]].reset_index(drop=True)
+                                )
+
+                            feature_df = pd.concat(feature_parts, axis=1)
+
+                            if len(feature_df) != len(market_df):
+                                raise RuntimeError(
+                                    f"Module 121 feature row count {len(feature_df)} "
+                                    f"does not match market rows {len(market_df)} "
+                                    f"for dataset {dataset_name}"
+                                )
+
+                            expected_columns = [
+                                "trend_score",
+                                "compression_score",
+                                "hurst_exponent",
+                                "normalized_entropy",
+                            ]
+
+                            if list(feature_df.columns) != expected_columns:
+                                raise RuntimeError(
+                                    f"Module 121 feature columns mismatch. "
+                                    f"Expected {expected_columns}, got {list(feature_df.columns)}"
+                                )
+
+                            self.logger.info(
+                                "    Module 121 adapter constructed "
+                                "4 canonical features from Modules 100, 102, 035 and 037"
+                            )
+                            self.logger.info(
+                                f"    Module 121 feature columns: {list(feature_df.columns)}"
+                            )
+
+                            module.set_dependency_features(feature_df)
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
