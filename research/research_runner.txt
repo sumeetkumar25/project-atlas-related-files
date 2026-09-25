@@ -467,6 +467,139 @@ class ResearchRunner:
 
                             module.set_dependency_features(feature_df)
 
+                        elif module_id == "120":
+                            # Module 120 analyzes temporal stability of the
+                            # canonical engineered features.
+                            #
+                            # It must receive the actual feature values from:
+                            #   100 -> trend_score
+                            #   102 -> compression_score
+                            #   035 -> hurst_exponent
+                            #   037 -> normalized_entropy
+                            #
+                            # Do NOT consume Module 103's "features" artifact.
+                            # Module 103 exports state information, not the
+                            # canonical feature-value matrix required here.
+
+                            dependency_artifacts = {}
+
+                            for dep in dependencies:
+                                artifacts = self.artifact_store.get(
+                                    dataset_name,
+                                    dep
+                                )
+
+                                if not artifacts:
+                                    raise RuntimeError(
+                                        f"Module 120 dependency {dep} has no artifacts "
+                                        f"for dataset {dataset_name}"
+                                    )
+
+                                dependency_artifacts[dep] = artifacts
+
+                            # ----------------------------------------------------
+                            # Required canonical feature sources
+                            # ----------------------------------------------------
+                            required_features = {
+                                "100": "trend_score",
+                                "102": "compression_score",
+                                "035": "hurst_exponent",
+                                "037": "normalized_entropy",
+                            }
+
+                            feature_parts = []
+
+                            for dep, feature_name in required_features.items():
+
+                                artifacts = dependency_artifacts.get(dep)
+
+                                if not artifacts:
+                                    raise RuntimeError(
+                                        f"Module 120 requires Module {dep} artifacts "
+                                        f"for dataset {dataset_name}"
+                                    )
+
+                                feature_df = artifacts.get("features")
+
+                                if feature_df is None:
+                                    raise RuntimeError(
+                                        f"Module {dep} did not provide a 'features' artifact "
+                                        f"for Module 120, dataset {dataset_name}"
+                                    )
+
+                                if not isinstance(feature_df, pd.DataFrame):
+                                    raise RuntimeError(
+                                        f"Module {dep} 'features' artifact is not a DataFrame "
+                                        f"for Module 120, dataset {dataset_name}"
+                                    )
+
+                                if feature_name not in feature_df.columns:
+                                    raise RuntimeError(
+                                        f"Module {dep} 'features' artifact does not contain "
+                                        f"required feature '{feature_name}' "
+                                        f"for Module 120, dataset {dataset_name}. "
+                                        f"Available columns: {list(feature_df.columns)}"
+                                    )
+
+                                feature_parts.append(
+                                    feature_df[[feature_name]].reset_index(drop=True)
+                                )
+
+                            # ----------------------------------------------------
+                            # Construct Module 120 feature matrix
+                            # ----------------------------------------------------
+                            feature_df = pd.concat(
+                                feature_parts,
+                                axis=1
+                            )
+
+                            # ----------------------------------------------------
+                            # Verify row alignment
+                            # ----------------------------------------------------
+                            if len(feature_df) != len(market_df):
+                                raise RuntimeError(
+                                    f"Module 120 feature row count mismatch for "
+                                    f"dataset {dataset_name}: "
+                                    f"features={len(feature_df)}, "
+                                    f"market={len(market_df)}"
+                                )
+
+                            # ----------------------------------------------------
+                            # Final structural verification
+                            # ----------------------------------------------------
+                            expected_columns = [
+                                "trend_score",
+                                "compression_score",
+                                "hurst_exponent",
+                                "normalized_entropy",
+                            ]
+
+                            missing = [
+                                col
+                                for col in expected_columns
+                                if col not in feature_df.columns
+                            ]
+
+                            if missing:
+                                raise RuntimeError(
+                                    f"Module 120 feature construction failed for "
+                                    f"dataset {dataset_name}. Missing: {missing}"
+                                )
+
+                            self.logger.info(
+                                f"    Module 120 adapter constructed "
+                                f"{len(feature_df.columns)} canonical features "
+                                f"from Modules 100, 102, 035 and 037"
+                            )
+
+                            self.logger.info(
+                                f"    Module 120 feature columns: "
+                                f"{list(feature_df.columns)}"
+                            )
+
+                            # Pass actual feature values into Module 120
+                            module.set_dependency_features(feature_df)
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
