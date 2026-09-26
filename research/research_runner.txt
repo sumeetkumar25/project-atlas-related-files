@@ -683,6 +683,75 @@ class ResearchRunner:
 
                             module.set_dependency_features(feature_df)
 
+                        elif module_id == "124":
+                            # Module 124 analyzes redundancy among the four canonical
+                            # engineered features produced by Modules 100, 102, 035 and 037.
+
+                            required_features = {
+                                "100": "trend_score",
+                                "102": "compression_score",
+                                "035": "hurst_exponent",
+                                "037": "normalized_entropy",
+                            }
+
+                            feature_parts = []
+
+                            for dep, feature_name in required_features.items():
+                                artifacts = dependency_artifacts.get(dep)
+
+                                if not artifacts:
+                                    raise RuntimeError(
+                                        f"Module 124 requires Module {dep} artifacts "
+                                        f"for dataset {dataset_name}"
+                                    )
+
+                                feature_df = artifacts.get("features")
+
+                                if not isinstance(feature_df, pd.DataFrame):
+                                    raise RuntimeError(
+                                        f"Module {dep} 'features' artifact is not a DataFrame "
+                                        f"for Module 124"
+                                    )
+
+                                if feature_name not in feature_df.columns:
+                                    raise RuntimeError(
+                                        f"Module {dep} 'features' artifact does not contain "
+                                        f"required feature '{feature_name}' for Module 124. "
+                                        f"Available columns: {list(feature_df.columns)}"
+                                    )
+
+                                feature_parts.append(
+                                    feature_df[[feature_name]].reset_index(drop=True)
+                                )
+
+                            feature_df = pd.concat(feature_parts, axis=1)
+
+                            expected_columns = [
+                                "trend_score",
+                                "compression_score",
+                                "hurst_exponent",
+                                "normalized_entropy",
+                            ]
+
+                            if list(feature_df.columns) != expected_columns:
+                                raise RuntimeError(
+                                    f"Module 124 feature construction failed. "
+                                    f"Expected {expected_columns}, got {list(feature_df.columns)}"
+                                )
+
+                            if len(feature_df) != len(market_df):
+                                raise RuntimeError(
+                                    f"Module 124 feature row mismatch: "
+                                    f"market={len(market_df)}, features={len(feature_df)}"
+                                )
+
+                            module.set_dependency_features(feature_df)
+
+                            self.logger.info(
+                                "    Module 124 adapter constructed 4 canonical features "
+                                "from Modules 100, 102, 035 and 037"
+                            )
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
