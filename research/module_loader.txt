@@ -110,7 +110,11 @@ class ModuleLoader:
                         'metadata': metadata,
                         'module_name': metadata.get('name', main_class.__name__),
                         'module_version': metadata.get('version', 'unknown'),
-                        'depends_on': metadata.get('depends_on', []),  # Normalized
+                        'depends_on': metadata.get('depends_on', []),
+
+                        # Target requirements declared directly by the module class
+                        'required_targets': getattr(main_class, 'REQUIRED_TARGETS', []),
+
                         'has_run_dataframe': hasattr(main_class, 'run_dataframe'),
                         'has_run': hasattr(main_class, 'run'),
                     }
