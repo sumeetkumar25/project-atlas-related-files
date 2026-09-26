@@ -687,6 +687,22 @@ class ResearchRunner:
                             # Module 124 analyzes redundancy among the four canonical
                             # engineered features produced by Modules 100, 102, 035 and 037.
 
+                            dependency_artifacts = {}
+
+                            for dep in dependencies:
+                                artifacts = self.artifact_store.get(
+                                    dataset_name,
+                                    dep
+                                )
+
+                                if not artifacts:
+                                    raise RuntimeError(
+                                        f"Module 124 dependency {dep} has no artifacts "
+                                        f"for dataset {dataset_name}"
+                                    )
+
+                                dependency_artifacts[dep] = artifacts
+
                             required_features = {
                                 "100": "trend_score",
                                 "102": "compression_score",
