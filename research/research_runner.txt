@@ -769,19 +769,8 @@ class ResearchRunner:
                             )
 
                         elif module_id == "126":
-                            # ----------------------------------------------------
-                            # Module 126: Feature Repository
-                            # ----------------------------------------------------
-                            # Module 126 is different from normal feature-analysis
-                            # modules. It does NOT consume a single injected
-                            # feature DataFrame through set_dependency_features().
-                            #
-                            # It expects a feature_dict:
-                            #     {module_id: feature_dataframe}
-                            #
-                            # Each upstream module must provide its "features"
-                            # artifact through the ArtifactStore.
-                            # ----------------------------------------------------
+                            # Module 126 is a feature repository.
+                            # It requires each feature DataFrame to contain a timestamp column.
 
                             feature_dict = {}
 
@@ -799,39 +788,49 @@ class ResearchRunner:
 
                                 feature_df = artifacts.get("features")
 
-                                if feature_df is None:
-                                    raise RuntimeError(
-                                        f"Module 126 dependency {dep} does not provide "
-                                        f"a 'features' artifact for dataset "
-                                        f"{dataset_name}"
-                                    )
-
                                 if not isinstance(feature_df, pd.DataFrame):
                                     raise RuntimeError(
-                                        f"Module 126 dependency {dep} 'features' "
-                                        f"artifact is not a DataFrame for dataset "
-                                        f"{dataset_name}"
+                                        f"Module 126 dependency {dep} does not provide "
+                                        f"a valid 'features' DataFrame for dataset {dataset_name}"
                                     )
 
-                                if feature_df.empty:
+                                feature_df = feature_df.copy().reset_index(drop=True)
+
+                                # Module 126's repository engine requires timestamp
+                                # in every feature DataFrame.
+                                if "timestamp" not in feature_df.columns:
+                                    if len(feature_df) != len(market_df):
+                                        raise RuntimeError(
+                                            f"Module 126 dependency {dep} row count "
+                                            f"{len(feature_df)} does not match market rows "
+                                            f"{len(market_df)} for dataset {dataset_name}"
+                                        )
+
+                                    feature_df.insert(
+                                        0,
+                                        "timestamp",
+                                        market_df["timestamp"].reset_index(drop=True)
+                                    )
+
+                                else:
+                                    feature_df["timestamp"] = (
+                                        feature_df["timestamp"]
+                                        .reset_index(drop=True)
+                                    )
+
+                                # Final row-count validation
+                                if len(feature_df) != len(market_df):
                                     raise RuntimeError(
-                                        f"Module 126 dependency {dep} has an empty "
-                                        f"'features' DataFrame for dataset "
-                                        f"{dataset_name}"
+                                        f"Module 126 dependency {dep} row count "
+                                        f"{len(feature_df)} does not match market rows "
+                                        f"{len(market_df)} for dataset {dataset_name}"
                                     )
 
-                                feature_dict[dep] = feature_df.copy()
+                                feature_dict[dep] = feature_df
 
                                 self.logger.info(
                                     f"    Module 126 received {len(feature_df.columns)} "
-                                    f"feature columns from Module {dep} "
-                                    f"({len(feature_df)} rows)"
-                                )
-
-                            if not feature_dict:
-                                raise RuntimeError(
-                                    f"Module 126 received no feature DataFrames "
-                                    f"for dataset {dataset_name}"
+                                    f"columns from Module {dep} ({len(feature_df)} rows)"
                                 )
 
                             self.logger.info(
@@ -840,8 +839,7 @@ class ResearchRunner:
                             )
 
                             self.logger.info(
-                                f"    Module 126 feature sources: "
-                                f"{list(feature_dict.keys())}"
+                                f"    Module 126 feature sources: {list(feature_dict.keys())}"
                             )
 
                             # IMPORTANT:
