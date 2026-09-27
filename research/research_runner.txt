@@ -768,6 +768,171 @@ class ResearchRunner:
                                 "from Modules 100, 102, 035 and 037"
                             )
 
+                        elif module_id == "126":
+                            # ----------------------------------------------------
+                            # Module 126: Feature Repository
+                            # ----------------------------------------------------
+                            # Module 126 is different from normal feature-analysis
+                            # modules. It does NOT consume a single injected
+                            # feature DataFrame through set_dependency_features().
+                            #
+                            # It expects a feature_dict:
+                            #     {module_id: feature_dataframe}
+                            #
+                            # Each upstream module must provide its "features"
+                            # artifact through the ArtifactStore.
+                            # ----------------------------------------------------
+
+                            feature_dict = {}
+
+                            for dep in dependencies:
+                                artifacts = self.artifact_store.get(
+                                    dataset_name,
+                                    dep
+                                )
+
+                                if not artifacts:
+                                    raise RuntimeError(
+                                        f"Module 126 dependency {dep} has no artifacts "
+                                        f"for dataset {dataset_name}"
+                                    )
+
+                                feature_df = artifacts.get("features")
+
+                                if feature_df is None:
+                                    raise RuntimeError(
+                                        f"Module 126 dependency {dep} does not provide "
+                                        f"a 'features' artifact for dataset "
+                                        f"{dataset_name}"
+                                    )
+
+                                if not isinstance(feature_df, pd.DataFrame):
+                                    raise RuntimeError(
+                                        f"Module 126 dependency {dep} 'features' "
+                                        f"artifact is not a DataFrame for dataset "
+                                        f"{dataset_name}"
+                                    )
+
+                                if feature_df.empty:
+                                    raise RuntimeError(
+                                        f"Module 126 dependency {dep} has an empty "
+                                        f"'features' DataFrame for dataset "
+                                        f"{dataset_name}"
+                                    )
+
+                                feature_dict[dep] = feature_df.copy()
+
+                                self.logger.info(
+                                    f"    Module 126 received {len(feature_df.columns)} "
+                                    f"feature columns from Module {dep} "
+                                    f"({len(feature_df)} rows)"
+                                )
+
+                            if not feature_dict:
+                                raise RuntimeError(
+                                    f"Module 126 received no feature DataFrames "
+                                    f"for dataset {dataset_name}"
+                                )
+
+                            self.logger.info(
+                                f"    Module 126 constructed feature_dict from "
+                                f"{len(feature_dict)} upstream modules"
+                            )
+
+                            self.logger.info(
+                                f"    Module 126 feature sources: "
+                                f"{list(feature_dict.keys())}"
+                            )
+
+                            # IMPORTANT:
+                            # Module 126 must be executed through its dedicated
+                            # run_repository() interface.
+                            result = module.run_repository(
+                                feature_dict=feature_dict,
+                                dataset_id=f"{module_id}_{dataset_name}",
+                                output_dir=module_output_dir,
+                            )
+
+                            duration = time.time() - start_time
+
+                            # Store standardized artifacts
+                            if hasattr(result, "artifacts") and result.artifacts:
+                                self.artifact_store.put(
+                                    dataset_name,
+                                    module_id,
+                                    result.artifacts
+                                )
+
+                                self.logger.info(
+                                    f"    Stored {len(result.artifacts)} artifacts "
+                                    f"for {dataset_name}"
+                                )
+
+                            # Export outputs
+                            self.export_manager.export_module_outputs(
+                                module_id,
+                                dataset_name,
+                                result,
+                                module_output_dir
+                            )
+
+                            # Extract statistics
+                            stats_df = self.export_manager.consolidate_statistics(
+                                module_id,
+                                dataset_name,
+                                result
+                            )
+
+                            # Add metadata
+                            stats_df["timestamp"] = datetime.now().isoformat()
+                            stats_df["duration"] = duration
+                            stats_df["version"] = module_info.get(
+                                "module_version",
+                                "unknown"
+                            )
+                            stats_df["has_features"] = self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            )
+                            stats_df["dataset"] = dataset_name
+
+                            all_stats.append(stats_df)
+
+                            success = result_succeeded(result)
+
+                            index_data.append({
+                                "module_id": module_id,
+                                "module_name": module_name,
+                                "dataset": dataset_name,
+                                "status": "PASS" if success else "FAIL",
+                                "csv_path": str(module_output_dir),
+                                "execution_time": duration,
+                                "rows": len(stats_df),
+                                "version": module_info.get(
+                                    "module_version",
+                                    "unknown"
+                                ),
+                                "timestamp": datetime.now().isoformat(),
+                                "dependencies": ",".join(dependencies),
+                                "has_features": self.artifact_store.has(
+                                    dataset_name,
+                                    module_id,
+                                    "features"
+                                ),
+                            })
+
+                            self.completed_modules.add(
+                                (dataset_name, module_id)
+                            )
+
+                            self.logger.success(
+                                f"    Module 126 completed for {dataset_name}"
+                            )
+
+                            # Skip the generic run_module() path below.
+                            continue
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
