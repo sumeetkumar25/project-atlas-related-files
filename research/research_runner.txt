@@ -924,7 +924,7 @@ class ResearchRunner:
                                 (dataset_name, module_id)
                             )
 
-                            self.logger.success(
+                            self.logger.info(
                                 f"    Module 126 completed for {dataset_name}"
                             )
 
