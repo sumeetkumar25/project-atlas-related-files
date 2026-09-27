@@ -931,6 +931,238 @@ class ResearchRunner:
                             # Skip the generic run_module() path below.
                             continue
 
+                        elif module_id == "200":
+                            # Module 200 consumes the completed master feature repository
+                            # produced by Module 126.
+                            #
+                            # Module 200 must NOT receive a normal market DataFrame or
+                            # dependency feature DataFrame. Its execution contract is:
+                            #
+                            #     master_path + metadata_path
+                            #
+                            # through run_integration().
+
+                            artifacts_126 = self.artifact_store.get(
+                                dataset_name,
+                                "126"
+                            )
+
+                            if not artifacts_126:
+                                raise RuntimeError(
+                                    f"Module 200 requires Module 126 artifacts "
+                                    f"for dataset {dataset_name}"
+                                )
+
+                            master_df = artifacts_126.get("master_feature_matrix")
+                            metadata_df = artifacts_126.get("feature_metadata")
+
+                            if not isinstance(master_df, pd.DataFrame):
+                                raise RuntimeError(
+                                    f"Module 200 requires Module 126 "
+                                    f"'master_feature_matrix' DataFrame "
+                                    f"for dataset {dataset_name}"
+                                )
+
+                            if not isinstance(metadata_df, pd.DataFrame):
+                                raise RuntimeError(
+                                    f"Module 200 requires Module 126 "
+                                    f"'feature_metadata' DataFrame "
+                                    f"for dataset {dataset_name}"
+                                )
+
+                            if master_df.empty:
+                                raise RuntimeError(
+                                    f"Module 126 master_feature_matrix is empty "
+                                    f"for dataset {dataset_name}"
+                                )
+
+                            if metadata_df.empty:
+                                raise RuntimeError(
+                                    f"Module 126 feature_metadata is empty "
+                                    f"for dataset {dataset_name}"
+                                )
+
+                            # ------------------------------------------------------------
+                            # Materialize Module 126 artifacts for Module 200.
+                            # Module 200's public interface requires file paths.
+                            # ------------------------------------------------------------
+
+                            module200_input_dir = (
+                                module_output_dir / "input"
+                            )
+
+                            module200_input_dir.mkdir(
+                                parents=True,
+                                exist_ok=True
+                            )
+
+                            master_path = (
+                                module200_input_dir /
+                                "master_feature_matrix.parquet"
+                            )
+
+                            metadata_path = (
+                                module200_input_dir /
+                                "feature_metadata.parquet"
+                            )
+
+                            master_df.to_parquet(
+                                master_path,
+                                index=False
+                            )
+
+                            metadata_df.to_parquet(
+                                metadata_path,
+                                index=False
+                            )
+
+                            self.logger.info(
+                                f"    Module 200 received master feature matrix "
+                                f"from Module 126: {len(master_df):,} rows, "
+                                f"{len(master_df.columns) - 1} features"
+                            )
+
+                            self.logger.info(
+                                f"    Module 200 materialized master matrix: "
+                                f"{master_path}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 200 materialized metadata: "
+                                f"{metadata_path}"
+                            )
+
+                            # ------------------------------------------------------------
+                            # IMPORTANT:
+                            # Module 200 has its own execution interface.
+                            # Do NOT call run_dataframe().
+                            # ------------------------------------------------------------
+
+                            result = module.run_integration(
+                                master_path=master_path,
+                                metadata_path=metadata_path,
+                                dataset_id=f"{module_id}_{dataset_name}",
+                                output_dir=module_output_dir,
+                            )
+
+                            duration = time.time() - start_time
+
+                            # ------------------------------------------------------------
+                            # Store artifacts
+                            # ------------------------------------------------------------
+
+                            if hasattr(result, "artifacts") and result.artifacts:
+                                self.artifact_store.put(
+                                    dataset_name,
+                                    module_id,
+                                    result.artifacts
+                                )
+
+                                self.logger.info(
+                                    f"    Stored {len(result.artifacts)} artifacts "
+                                    f"for {dataset_name}"
+                                )
+
+                            # ------------------------------------------------------------
+                            # Export outputs
+                            # ------------------------------------------------------------
+
+                            self.export_manager.export_module_outputs(
+                                module_id,
+                                dataset_name,
+                                result,
+                                module_output_dir
+                            )
+
+                            # ------------------------------------------------------------
+                            # Statistics
+                            # ------------------------------------------------------------
+
+                            stats_df = self.export_manager.consolidate_statistics(
+                                module_id,
+                                dataset_name,
+                                result
+                            )
+
+                            stats_df["timestamp"] = datetime.now().isoformat()
+                            stats_df["duration"] = duration
+                            stats_df["version"] = module_info.get(
+                                "module_version",
+                                "unknown"
+                            )
+                            stats_df["has_features"] = self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            )
+                            stats_df["dataset"] = dataset_name
+
+                            all_stats.append(stats_df)
+
+                            success = result_succeeded(result)
+
+                            index_data.append({
+                                "module_id": module_id,
+                                "module_name": module_name,
+                                "dataset": dataset_name,
+                                "status": "PASS" if success else "FAIL",
+                                "csv_path": str(module_output_dir),
+                                "execution_time": duration,
+                                "rows": len(stats_df),
+                                "version": module_info.get(
+                                    "module_version",
+                                    "unknown"
+                                ),
+                                "timestamp": datetime.now().isoformat(),
+                                "dependencies": ",".join(dependencies),
+                                "has_features": self.artifact_store.has(
+                                    dataset_name,
+                                    module_id,
+                                    "features"
+                                ),
+                            })
+
+                            self.logger.module_result(
+                                module_id,
+                                dataset_name,
+                                success,
+                                duration,
+                                len(stats_df)
+                            )
+
+                            report = self.summary_builder.build_module_report(
+                                module_id,
+                                module_info,
+                                result,
+                                dataset_name,
+                                duration
+                            )
+
+                            self.export_manager.export_report(
+                                f"{module_id}_{dataset_name}",
+                                report
+                            )
+
+                            self.results.append({
+                                "module_id": module_id,
+                                "dataset": dataset_name,
+                                "success": success,
+                                "duration": duration,
+                                "stats_count": len(stats_df)
+                            })
+
+                            if success:
+                                self.completed_modules.add(
+                                    (dataset_name, module_id)
+                                )
+
+                            self.logger.info(
+                                f"    Module 200 completed for {dataset_name}"
+                            )
+
+                            # Do not fall through to generic run_dataframe().
+                            continue
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
