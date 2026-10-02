@@ -1597,6 +1597,221 @@ class ResearchRunner:
                             # generic run_dataframe() path.
                             continue
 
+                        elif module_id == "203":
+                            # ============================================================
+                            # MODULE 203 - FEATURE PREDICTIVE POWER
+                            # ============================================================
+                            # Module 203 is file-driven.
+                            # It consumes Module 202's stable feature matrix.
+                            # Do NOT route it through generic run_dataframe().
+                            # ============================================================
+
+                            module202_output_dir = (
+                                self.export_manager.raw_dir
+                                / "module202"
+                                / dataset_name
+                            )
+
+                            matrix_path = (
+                                module202_output_dir
+                                / "stable_feature_matrix.parquet"
+                            )
+
+                            self.logger.info(
+                                f"    Module 203 received stable matrix "
+                                f"from Module 202: {matrix_path}"
+                            )
+
+                            # ----------------------------------------------------
+                            # Validate Module 202 output
+                            # ----------------------------------------------------
+
+                            if not matrix_path.exists():
+                                raise FileNotFoundError(
+                                    f"Module 203 stable matrix not found: "
+                                    f"{matrix_path}"
+                                )
+
+                            if matrix_path.stat().st_size == 0:
+                                raise ValueError(
+                                    f"Module 203 stable matrix is empty: "
+                                    f"{matrix_path}"
+                                )
+
+                            # Inspect matrix
+                            stable_matrix_df = pd.read_parquet(matrix_path)
+
+                            if stable_matrix_df.empty:
+                                raise ValueError(
+                                    f"Module 203 stable matrix contains no rows: "
+                                    f"{matrix_path}"
+                                )
+
+                            if "timestamp" not in stable_matrix_df.columns:
+                                raise ValueError(
+                                    f"Module 203 stable matrix missing timestamp "
+                                    f"column: {matrix_path}"
+                                )
+
+                            feature_columns = [
+                                c for c in stable_matrix_df.columns
+                                if c != "timestamp"
+                            ]
+
+                            if not feature_columns:
+                                raise ValueError(
+                                    f"Module 203 stable matrix contains no "
+                                    f"features: {matrix_path}"
+                                )
+
+                            self.logger.info(
+                                f"    Module 203 input: "
+                                f"{len(stable_matrix_df):,} rows, "
+                                f"{len(feature_columns)} features"
+                            )
+
+                            # ------------------------------------------------------------
+                            # IMPORTANT:
+                            # Module 203 has its own execution interface.
+                            # Do NOT call run_dataframe().
+                            # ------------------------------------------------------------
+
+                            result = module.run_predictive(
+                                matrix_path=matrix_path,
+                                dataset_id=f"{module_id}_{dataset_name}",
+                                output_dir=module_output_dir
+                            )
+
+                            duration = time.time() - start_time
+
+                            # ----------------------------------------------------
+                            # Store artifacts
+                            # ----------------------------------------------------
+
+                            if hasattr(result, "artifacts") and result.artifacts:
+                                self.artifact_store.put(
+                                    dataset_name,
+                                    module_id,
+                                    result.artifacts
+                                )
+
+                                self.logger.info(
+                                    f"    Stored {len(result.artifacts)} "
+                                    f"artifacts for {dataset_name}"
+                                )
+
+                            # ----------------------------------------------------
+                            # Export outputs
+                            # ----------------------------------------------------
+
+                            self.export_manager.export_module_outputs(
+                                module_id,
+                                dataset_name,
+                                result,
+                                module_output_dir
+                            )
+
+                            # ----------------------------------------------------
+                            # Statistics
+                            # ----------------------------------------------------
+
+                            stats_df = self.export_manager.consolidate_statistics(
+                                module_id,
+                                dataset_name,
+                                result
+                            )
+
+                            stats_df["timestamp"] = datetime.now().isoformat()
+                            stats_df["duration"] = duration
+                            stats_df["version"] = module_info.get(
+                                "module_version",
+                                "unknown"
+                            )
+                            stats_df["has_features"] = self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            )
+                            stats_df["dataset"] = dataset_name
+
+                            all_stats.append(stats_df)
+
+                            # ----------------------------------------------------
+                            # Determine success
+                            # ----------------------------------------------------
+
+                            success = result_succeeded(result)
+
+                            index_data.append({
+                                "module_id": module_id,
+                                "module_name": module_name,
+                                "dataset": dataset_name,
+                                "status": "PASS" if success else "FAIL",
+                                "csv_path": str(module_output_dir),
+                                "execution_time": duration,
+                                "rows": len(stats_df),
+                                "version": module_info.get(
+                                    "module_version",
+                                    "unknown"
+                                ),
+                                "timestamp": datetime.now().isoformat(),
+                                "dependencies": ",".join(dependencies),
+                                "has_features": self.artifact_store.has(
+                                    dataset_name,
+                                    module_id,
+                                    "features"
+                                ),
+                            })
+
+                            self.logger.module_result(
+                                module_id,
+                                dataset_name,
+                                success,
+                                duration,
+                                len(stats_df)
+                            )
+
+                            # ----------------------------------------------------
+                            # Build and export Module 203 report
+                            # ----------------------------------------------------
+
+                            report = self.summary_builder.build_module_report(
+                                module_id,
+                                module_info,
+                                result,
+                                dataset_name,
+                                duration
+                            )
+
+                            self.export_manager.export_report(
+                                f"{module_id}_{dataset_name}",
+                                report
+                            )
+
+                            self.results.append({
+                                "module_id": module_id,
+                                "dataset": dataset_name,
+                                "success": success,
+                                "duration": duration,
+                                "stats_count": len(stats_df)
+                            })
+
+                            # Only successful modules satisfy downstream
+                            # dependencies.
+                            if success:
+                                self.completed_modules.add(
+                                    (dataset_name, module_id)
+                                )
+
+                            self.logger.info(
+                                f"    Module 203 completed for {dataset_name}"
+                            )
+
+                            # IMPORTANT:
+                            # Prevent Module 203 from falling through to the
+                            # generic run_dataframe() path.
+                            continue
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
