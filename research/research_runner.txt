@@ -1638,7 +1638,10 @@ class ResearchRunner:
                                     f"{matrix_path}"
                                 )
 
-                            # Inspect matrix
+                            # ----------------------------------------------------
+                            # Load Module 202 stable feature matrix
+                            # ----------------------------------------------------
+
                             stable_matrix_df = pd.read_parquet(matrix_path)
 
                             if stable_matrix_df.empty:
@@ -1653,21 +1656,104 @@ class ResearchRunner:
                                     f"column: {matrix_path}"
                                 )
 
+                            # ----------------------------------------------------
+                            # Module 203 requires:
+                            #   timestamp
+                            #   close
+                            #   stable features from Module 202
+                            #
+                            # IMPORTANT:
+                            # Do NOT modify Module 202's stable matrix.
+                            # We construct a temporary Module 203 input matrix.
+                            # ----------------------------------------------------
+
+                            if "close" not in market_df.columns:
+                                raise ValueError(
+                                    f"Module 203 requires 'close' in the raw market "
+                                    f"dataset for {dataset_name}"
+                                )
+
+                            if len(stable_matrix_df) != len(market_df):
+                                raise ValueError(
+                                    f"Module 203 row-count mismatch for {dataset_name}: "
+                                    f"stable_matrix={len(stable_matrix_df)}, "
+                                    f"market_data={len(market_df)}"
+                                )
+
+                            # Reset indexes before positional alignment
+                            stable_matrix_df = stable_matrix_df.reset_index(drop=True)
+                            market_close = market_df["close"].reset_index(drop=True)
+
+                            # Verify timestamp alignment
+                            market_timestamp = pd.to_datetime(
+                                market_df["timestamp"].reset_index(drop=True)
+                            )
+
+                            stable_timestamp = pd.to_datetime(
+                                stable_matrix_df["timestamp"]
+                            )
+
+                            if not stable_timestamp.equals(market_timestamp):
+                                raise ValueError(
+                                    f"Module 203 timestamp alignment failed for "
+                                    f"{dataset_name}. "
+                                    f"Module 202 stable matrix and raw market data "
+                                    f"are not aligned."
+                                )
+
+                            # Add close ONLY to the Module 203 analysis input.
+                            predictive_input_df = stable_matrix_df.copy()
+
+                            predictive_input_df["close"] = market_close
+
+                            # Put timestamp first, close second, features after that
                             feature_columns = [
-                                c for c in stable_matrix_df.columns
-                                if c != "timestamp"
+                                c for c in predictive_input_df.columns
+                                if c not in {"timestamp", "close"}
                             ]
 
                             if not feature_columns:
                                 raise ValueError(
-                                    f"Module 203 stable matrix contains no "
-                                    f"features: {matrix_path}"
+                                    f"Module 203 stable matrix contains no features: "
+                                    f"{matrix_path}"
                                 )
+
+                            predictive_input_df = predictive_input_df[
+                                ["timestamp", "close"] + feature_columns
+                            ]
+
+                            # ----------------------------------------------------
+                            # Save temporary Module 203 input
+                            # ----------------------------------------------------
+
+                            module203_input_dir = (
+                                module_output_dir / "input"
+                            )
+
+                            module203_input_dir.mkdir(
+                                parents=True,
+                                exist_ok=True
+                            )
+
+                            predictive_input_path = (
+                                module203_input_dir
+                                / "predictive_input.parquet"
+                            )
+
+                            predictive_input_df.to_parquet(
+                                predictive_input_path,
+                                index=False
+                            )
+
+                            self.logger.info(
+                                f"    Module 203 input matrix created: "
+                                f"{predictive_input_path}"
+                            )
 
                             self.logger.info(
                                 f"    Module 203 input: "
-                                f"{len(stable_matrix_df):,} rows, "
-                                f"{len(feature_columns)} features"
+                                f"{len(predictive_input_df):,} rows, "
+                                f"{len(feature_columns)} features + close"
                             )
 
                             # ------------------------------------------------------------
@@ -1677,7 +1763,7 @@ class ResearchRunner:
                             # ------------------------------------------------------------
 
                             result = module.run_predictive(
-                                matrix_path=matrix_path,
+                                matrix_path=predictive_input_path,
                                 dataset_id=f"{module_id}_{dataset_name}",
                                 output_dir=module_output_dir
                             )
