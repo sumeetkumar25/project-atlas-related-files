@@ -1163,6 +1163,223 @@ class ResearchRunner:
                             # Do not fall through to generic run_dataframe().
                             continue
 
+                        elif module_id == "201":
+                            # Module 201 consumes the integrated feature matrix
+                            # produced by Module 200.
+                            #
+                            # Module 201 must NOT receive the normal market DataFrame
+                            # or dependency-injected feature DataFrame.
+                            #
+                            # Its execution contract is:
+                            #
+                            #     integrated_matrix_path
+                            #
+                            # through run_independence().
+
+                            module200_output_dir = (
+                                self.export_manager.raw_dir
+                                / "module200"
+                                / dataset_name
+                            )
+
+                            matrix_path = (
+                                module200_output_dir
+                                / "integrated_feature_matrix.parquet"
+                            )
+
+                            # ----------------------------------------------------
+                            # Validate Module 200 output
+                            # ----------------------------------------------------
+
+                            if not matrix_path.exists():
+                                raise RuntimeError(
+                                    f"Module 201 requires Module 200 integrated "
+                                    f"feature matrix for dataset {dataset_name}: "
+                                    f"{matrix_path}"
+                                )
+
+                            integrated_df = pd.read_parquet(matrix_path)
+
+                            if integrated_df.empty:
+                                raise RuntimeError(
+                                    f"Module 200 integrated feature matrix is empty "
+                                    f"for dataset {dataset_name}: {matrix_path}"
+                                )
+
+                            if "timestamp" not in integrated_df.columns:
+                                raise RuntimeError(
+                                    f"Module 200 integrated feature matrix has no "
+                                    f"'timestamp' column for dataset "
+                                    f"{dataset_name}: {matrix_path}"
+                                )
+
+                            feature_columns = [
+                                column
+                                for column in integrated_df.columns
+                                if column != "timestamp"
+                            ]
+
+                            if len(feature_columns) < 2:
+                                raise RuntimeError(
+                                    f"Module 201 requires at least 2 features, "
+                                    f"but Module 200 produced "
+                                    f"{len(feature_columns)} features for "
+                                    f"dataset {dataset_name}"
+                                )
+
+                            self.logger.info(
+                                f"    Module 201 received integrated matrix "
+                                f"from Module 200: "
+                                f"{len(integrated_df):,} rows, "
+                                f"{len(feature_columns)} features"
+                            )
+
+                            self.logger.info(
+                                f"    Module 201 matrix path: {matrix_path}"
+                            )
+
+                            # ----------------------------------------------------
+                            # IMPORTANT:
+                            # Module 201 has its own execution interface.
+                            # Do NOT call run_dataframe().
+                            # ----------------------------------------------------
+
+                            result = module.run_independence(
+                                matrix_path=matrix_path,
+                                dataset_id=f"{module_id}_{dataset_name}",
+                                output_dir=module_output_dir,
+                            )
+
+                            duration = time.time() - start_time
+
+                            # ----------------------------------------------------
+                            # Store artifacts
+                            # ----------------------------------------------------
+
+                            if hasattr(result, "artifacts") and result.artifacts:
+                                self.artifact_store.put(
+                                    dataset_name,
+                                    module_id,
+                                    result.artifacts
+                                )
+
+                                self.logger.info(
+                                    f"    Stored {len(result.artifacts)} "
+                                    f"artifacts for {dataset_name}"
+                                )
+
+                            # ----------------------------------------------------
+                            # Export outputs
+                            # ----------------------------------------------------
+
+                            self.export_manager.export_module_outputs(
+                                module_id,
+                                dataset_name,
+                                result,
+                                module_output_dir
+                            )
+
+                            # ----------------------------------------------------
+                            # Statistics
+                            # ----------------------------------------------------
+
+                            stats_df = self.export_manager.consolidate_statistics(
+                                module_id,
+                                dataset_name,
+                                result
+                            )
+
+                            stats_df["timestamp"] = datetime.now().isoformat()
+                            stats_df["duration"] = duration
+                            stats_df["version"] = module_info.get(
+                                "module_version",
+                                "unknown"
+                            )
+                            stats_df["has_features"] = self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            )
+                            stats_df["dataset"] = dataset_name
+
+                            all_stats.append(stats_df)
+
+                            # ----------------------------------------------------
+                            # Determine success
+                            # ----------------------------------------------------
+
+                            success = result_succeeded(result)
+
+                            index_data.append({
+                                "module_id": module_id,
+                                "module_name": module_name,
+                                "dataset": dataset_name,
+                                "status": "PASS" if success else "FAIL",
+                                "csv_path": str(module_output_dir),
+                                "execution_time": duration,
+                                "rows": len(stats_df),
+                                "version": module_info.get(
+                                    "module_version",
+                                    "unknown"
+                                ),
+                                "timestamp": datetime.now().isoformat(),
+                                "dependencies": ",".join(dependencies),
+                                "has_features": self.artifact_store.has(
+                                    dataset_name,
+                                    module_id,
+                                    "features"
+                                ),
+                            })
+
+                            self.logger.module_result(
+                                module_id,
+                                dataset_name,
+                                success,
+                                duration,
+                                len(stats_df)
+                            )
+
+                            # ----------------------------------------------------
+                            # Build and export Module 201 report
+                            # ----------------------------------------------------
+
+                            report = self.summary_builder.build_module_report(
+                                module_id,
+                                module_info,
+                                result,
+                                dataset_name,
+                                duration
+                            )
+
+                            self.export_manager.export_report(
+                                f"{module_id}_{dataset_name}",
+                                report
+                            )
+
+                            self.results.append({
+                                "module_id": module_id,
+                                "dataset": dataset_name,
+                                "success": success,
+                                "duration": duration,
+                                "stats_count": len(stats_df)
+                            })
+
+                            # Only successful modules satisfy downstream
+                            # dependencies.
+                            if success:
+                                self.completed_modules.add(
+                                    (dataset_name, module_id)
+                                )
+
+                            self.logger.info(
+                                f"    Module 201 completed for {dataset_name}"
+                            )
+
+                            # IMPORTANT:
+                            # Prevent Module 201 from falling through to the
+                            # generic run_dataframe() path.
+                            continue
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
