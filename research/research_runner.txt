@@ -2114,6 +2114,276 @@ class ResearchRunner:
                             # Do not fall through to generic run_dataframe().
                             continue
 
+                        elif module_id == "205":
+                            # ============================================================
+                            # MODULE 205 - FEATURE SELECTION
+                            # ============================================================
+                            # Module 205 is a file-driven feature-selection module.
+                            #
+                            # It consumes the outputs of four upstream modules:
+                            #
+                            #   Module 203 : predictive_feature_matrix.parquet
+                            #                (per-timeframe predictive evidence)
+                            #
+                            #   Module 202 : stability_file
+                            #                (stable feature matrix)
+                            #
+                            #   Module 203 : interaction_file
+                            #                (per-timeframe predictive evidence,
+                            #                 same file as predictive_matrix)
+                            #
+                            #   Module 204 : feature_redundancy.csv
+                            #                (redundancy scores per feature)
+                            #
+                            #   Module 204 : removed_redundant_features.csv
+                            #                (features removed as redundant)
+                            #
+                            # IMPORTANT:
+                            # Do NOT route Module 205 through generic
+                            # run_dataframe().
+                            # ============================================================
+
+                            # ----------------------------------------------------
+                            # Locate upstream artifacts
+                            # ----------------------------------------------------
+
+                            module202_dir = (
+                                self.export_manager.raw_dir
+                                / "module202"
+                                / dataset_name
+                            )
+
+                            module203_dir = (
+                                self.export_manager.raw_dir
+                                / "module203"
+                                / dataset_name
+                            )
+
+                            module204_dir = (
+                                self.export_manager.raw_dir
+                                / "module204"
+                                / dataset_name
+                            )
+
+                            predictive_matrix_path = (
+                                module203_dir
+                                / "input"
+                                / "predictive_input.parquet"
+                            )
+
+                            stability_file = (
+                                module202_dir
+                                / "stable_feature_matrix.parquet"
+                            )
+
+                            interaction_file = (
+                                module203_dir
+                                / "input"
+                                / "predictive_input.parquet"
+                            )
+
+                            redundancy_file = (
+                                module204_dir
+                                / "feature_redundancy.csv"
+                            )
+
+                            removed_file = (
+                                module204_dir
+                                / "removed_redundant_features.csv"
+                            )
+
+                            # ----------------------------------------------------
+                            # Validate required upstream files
+                            # ----------------------------------------------------
+
+                            required_files = {
+                                "Module 203 predictive_feature_matrix":
+                                    predictive_matrix_path,
+                                "Module 202 stability_file":
+                                    stability_file,
+                                "Module 203 interaction_file":
+                                    interaction_file,
+                                "Module 204 feature_redundancy.csv":
+                                    redundancy_file,
+                                "Module 204 removed_redundant_features.csv":
+                                    removed_file,
+                            }
+
+                            missing_files = [
+                                f"  - {label}: {path}"
+                                for label, path in required_files.items()
+                                if not path.exists()
+                            ]
+
+                            if missing_files:
+                                raise FileNotFoundError(
+                                    f"Module 205 is missing required upstream "
+                                    f"files for dataset {dataset_name}:\n"
+                                    + "\n".join(missing_files)
+                                )
+
+                            self.logger.info(
+                                f"    Module 205 received all required inputs "
+                                f"for {dataset_name}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 205 predictive_matrix: "
+                                f"{predictive_matrix_path}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 205 stability_file: "
+                                f"{stability_file}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 205 interaction_file: "
+                                f"{interaction_file}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 205 redundancy_file: "
+                                f"{redundancy_file}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 205 removed_file: "
+                                f"{removed_file}"
+                            )
+
+                            # ----------------------------------------------------
+                            # IMPORTANT:
+                            # Module 205 has its own execution interface.
+                            # Do NOT call run_dataframe().
+                            # ----------------------------------------------------
+
+                            result = module.run_selection(
+                                predictive_matrix=predictive_matrix_path,
+                                stability_file=stability_file,
+                                interaction_file=interaction_file,
+                                redundancy_file=redundancy_file,
+                                removed_file=removed_file,
+                                dataset_id=f"{module_id}_{dataset_name}",
+                                output_dir=module_output_dir,
+                            )
+
+                            duration = time.time() - start_time
+
+                            # ----------------------------------------------------
+                            # Standardized artifact bookkeeping
+                            # ----------------------------------------------------
+
+                            if hasattr(result, "artifacts") and result.artifacts:
+                                self.artifact_store.put(
+                                    dataset_name,
+                                    module_id,
+                                    result.artifacts
+                                )
+
+                                self.logger.info(
+                                    f"    Stored {len(result.artifacts)} artifacts "
+                                    f"for {dataset_name}"
+                                )
+
+                            self.export_manager.export_module_outputs(
+                                module_id,
+                                dataset_name,
+                                result,
+                                module_output_dir
+                            )
+
+                            stats_df = self.export_manager.consolidate_statistics(
+                                module_id,
+                                dataset_name,
+                                result
+                            )
+
+                            stats_df["timestamp"] = datetime.now().isoformat()
+                            stats_df["duration"] = duration
+                            stats_df["version"] = module_info.get(
+                                "module_version",
+                                "unknown"
+                            )
+                            stats_df["has_features"] = self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            )
+                            stats_df["dataset"] = dataset_name
+
+                            all_stats.append(stats_df)
+
+                            success = result_succeeded(result)
+
+                            index_data.append({
+                                "module_id": module_id,
+                                "module_name": module_name,
+                                "dataset": dataset_name,
+                                "status": "PASS" if success else "FAIL",
+                                "csv_path": str(module_output_dir),
+                                "execution_time": duration,
+                                "rows": len(stats_df),
+                                "version": module_info.get(
+                                    "module_version",
+                                    "unknown"
+                                ),
+                                "timestamp": datetime.now().isoformat(),
+                                "dependencies": ",".join(dependencies),
+                                "has_features": self.artifact_store.has(
+                                    dataset_name,
+                                    module_id,
+                                    "features"
+                                ),
+                            })
+
+                            self.logger.module_result(
+                                module_id,
+                                dataset_name,
+                                success,
+                                duration,
+                                len(stats_df)
+                            )
+
+                            # ----------------------------------------------------
+                            # Build and export Module 205 report
+                            # ----------------------------------------------------
+
+                            report = self.summary_builder.build_module_report(
+                                module_id,
+                                module_info,
+                                result,
+                                dataset_name,
+                                duration
+                            )
+
+                            self.export_manager.export_report(
+                                f"{module_id}_{dataset_name}",
+                                report
+                            )
+
+                            self.results.append({
+                                "module_id": module_id,
+                                "dataset": dataset_name,
+                                "success": success,
+                                "duration": duration,
+                                "stats_count": len(stats_df)
+                            })
+
+                            # Only successful modules satisfy downstream
+                            # dependencies.
+                            if success:
+                                self.completed_modules.add(
+                                    (dataset_name, module_id)
+                                )
+
+                            self.logger.info(
+                                f"    Module 205 completed for {dataset_name}"
+                            )
+
+                            # Do not fall through to generic run_dataframe().
+                            continue
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
