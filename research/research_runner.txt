@@ -1771,6 +1771,48 @@ class ResearchRunner:
                             duration = time.time() - start_time
 
                             # ----------------------------------------------------
+                            # Fix 1 — Validate Module 203 output
+                            # ----------------------------------------------------
+                            # Confirm that Module 203 produced a non-empty
+                            # predictive feature matrix with at least one
+                            # feature column. If not, abort before downstream
+                            # modules consume a degenerate file.
+
+                            predictive_matrix_path = (
+                                module_output_dir
+                                / "predictive_feature_matrix.parquet"
+                            )
+
+                            if not predictive_matrix_path.exists():
+                                raise RuntimeError(
+                                    f"Module 203 did not produce a predictive "
+                                    f"feature matrix for {dataset_name}: "
+                                    f"{predictive_matrix_path}"
+                                )
+
+                            predictive_matrix = pd.read_parquet(
+                                predictive_matrix_path
+                            )
+
+                            if predictive_matrix is None or predictive_matrix.empty:
+                                raise RuntimeError(
+                                    "Module 203 produced an empty predictive "
+                                    "feature matrix. Module 205 must not "
+                                    "continue."
+                                )
+
+                            if predictive_matrix.shape[1] == 0:
+                                raise RuntimeError(
+                                    "Module 203 produced zero feature columns."
+                                )
+
+                            self.logger.info(
+                                f"    Module 203 predictive matrix: "
+                                f"{predictive_matrix.shape[0]} rows x "
+                                f"{predictive_matrix.shape[1]} features"
+                            )
+
+                            # ----------------------------------------------------
                             # Store artifacts
                             # ----------------------------------------------------
 
@@ -1920,7 +1962,7 @@ class ResearchRunner:
                             )
 
                             # ----------------------------------------------------
-                            # Validate Module 203 input
+                            # Fix 2 — Validate Module 204 input
                             # ----------------------------------------------------
 
                             if not matrix_path.exists():
@@ -1932,10 +1974,10 @@ class ResearchRunner:
 
                             predictive_matrix_df = pd.read_parquet(matrix_path)
 
-                            if predictive_matrix_df.empty:
-                                raise ValueError(
-                                    f"Module 204 predictive matrix is empty for "
-                                    f"{dataset_name}:\n{matrix_path}"
+                            if predictive_matrix_df is None or predictive_matrix_df.empty:
+                                raise RuntimeError(
+                                    "Module 204 received an empty predictive "
+                                    "feature matrix."
                                 )
 
                             if "timestamp" not in predictive_matrix_df.columns:
@@ -1971,12 +2013,20 @@ class ResearchRunner:
                                 if c not in ignored_columns
                             ]
 
-                            if not feature_columns:
+                            # ----------------------------------------------------
+                            # Fix — Require at least 2 candidate features
+                            # ----------------------------------------------------
+                            # Module 204 performs pairwise redundancy / synergy
+                            # analysis. With fewer than 2 candidate features it
+                            # cannot construct a single pair, so it must abort
+                            # with a message that names the requirement and
+                            # lists the actual columns.
+
+                            if len(feature_columns) < 2:
                                 raise ValueError(
-                                    f"Module 204 predictive input contains no "
-                                    f"candidate features for {dataset_name}.\n"
-                                    f"Available columns: "
-                                    f"{list(predictive_matrix_df.columns)}"
+                                    f"Module 204 requires at least 2 candidate features for "
+                                    f"{dataset_name}, but received {len(feature_columns)}: "
+                                    f"{feature_columns}"
                                 )
 
                             self.logger.info(
@@ -2188,6 +2238,32 @@ class ResearchRunner:
                                 module204_dir
                                 / "removed_redundant_features.csv"
                             )
+
+                            # ----------------------------------------------------
+                            # Fix 3 — Validate Module 205 input loading
+                            # ----------------------------------------------------
+                            # Fail immediately when the predictive matrix is
+                            # missing, empty, or contains zero feature columns.
+
+                            if not predictive_matrix_path.exists():
+                                raise FileNotFoundError(
+                                    f"Missing predictive matrix: "
+                                    f"{predictive_matrix_path}"
+                                )
+
+                            predictive_matrix = pd.read_parquet(
+                                predictive_matrix_path
+                            )
+
+                            if (
+                                predictive_matrix is None
+                                or predictive_matrix.empty
+                                or predictive_matrix.shape[1] == 0
+                            ):
+                                raise RuntimeError(
+                                    "Module 205 received zero predictive "
+                                    "features."
+                                )
 
                             # ----------------------------------------------------
                             # Validate required upstream files
@@ -2498,6 +2574,26 @@ class ResearchRunner:
                     # FIXED: Use canonical result_succeeded()
                     success = result_succeeded(result)
                     
+                    # ----------------------------------------------------
+                    # Fix 4 — Validation gate: fail the module when
+                    # software_validation_passed is False.
+                    # ----------------------------------------------------
+                    validation = {}
+                    if hasattr(result, "statistics") and isinstance(result.statistics, dict):
+                        validation = result.statistics
+                    elif hasattr(result, "validation") and isinstance(result.validation, dict):
+                        validation = result.validation
+
+                    validation_passed = validation.get(
+                        "software_validation_passed",
+                        validation.get("passed", True)
+                    )
+
+                    if validation_passed is False:
+                        raise RuntimeError(
+                            f"Module {module_id} validation failed"
+                        )
+                    
                     # Build index entry
                     index_data.append({
                         'module_id': module_id,
@@ -2542,8 +2638,7 @@ class ResearchRunner:
                         'stats_count': len(stats_df)
                     })
                     
-                    # FIXED: Mark as completed only when execution actually succeeded.
-                    # Failed modules must never satisfy downstream dependencies.
+                    # Mark as completed only when execution actually succeeded.
                     if success:
                         self.completed_modules.add((dataset_name, module_id))
                     
@@ -2923,6 +3018,41 @@ class ResearchRunner:
             json.dump(injection_log, f, indent=2, default=str)
         self.logger.info(f"Saved injection log: {injection_path}")
         
+        # ----------------------------------------------------------------
+        # Fix 5 — Campaign freeze gate
+        # ----------------------------------------------------------------
+        # Abort before writing the final campaign summary when the campaign
+        # is not freeze-ready:
+        #   - any module failed validation, OR
+        #   - Module 205 selected zero features.
+
+        failed_modules = sum(
+            1 for r in self.results
+            if not r.get("success", False)
+        )
+
+        if failed_modules > 0:
+            raise RuntimeError(
+                f"Research campaign is not freeze-ready: "
+                f"{failed_modules} module(s) failed validation."
+            )
+
+        # Check Module 205 selection outcome via the index entries.
+        module205_selected_features = 0
+
+        for entry in index_data:
+            if entry.get("module_id") == "205":
+                stats_count = int(entry.get("rows", 0) or 0)
+                if stats_count > 0:
+                    module205_selected_features = stats_count
+                break
+
+        if module205_selected_features == 0:
+            raise RuntimeError(
+                "Research campaign is not freeze-ready: "
+                "Module 205 selected zero features."
+            )
+
         # Generate campaign summary
         summary = self.summary_builder.build_campaign_summary(
             self.results,
