@@ -2125,12 +2125,11 @@ class ResearchRunner:
                             #   Module 203 : predictive_feature_matrix.parquet
                             #                (per-timeframe predictive evidence)
                             #
-                            #   Module 202 : stability_file
-                            #                (stable feature matrix)
+                            #   Module 202 : feature_stability.csv
+                            #                (stability scores per feature)
                             #
-                            #   Module 203 : interaction_file
-                            #                (per-timeframe predictive evidence,
-                            #                 same file as predictive_matrix)
+                            #   Module 203 : predictive_feature_scores.csv
+                            #                (predictive scores per feature)
                             #
                             #   Module 204 : feature_redundancy.csv
                             #                (redundancy scores per feature)
@@ -2167,19 +2166,17 @@ class ResearchRunner:
 
                             predictive_matrix_path = (
                                 module203_dir
-                                / "input"
-                                / "predictive_input.parquet"
+                                / "predictive_feature_matrix.parquet"
                             )
 
                             stability_file = (
                                 module202_dir
-                                / "stable_feature_matrix.parquet"
+                                / "feature_stability.csv"
                             )
 
                             interaction_file = (
                                 module203_dir
-                                / "input"
-                                / "predictive_input.parquet"
+                                / "predictive_feature_scores.csv"
                             )
 
                             redundancy_file = (
@@ -2199,9 +2196,9 @@ class ResearchRunner:
                             required_files = {
                                 "Module 203 predictive_feature_matrix":
                                     predictive_matrix_path,
-                                "Module 202 stability_file":
+                                "Module 202 feature_stability.csv":
                                     stability_file,
-                                "Module 203 interaction_file":
+                                "Module 203 predictive_feature_scores.csv":
                                     interaction_file,
                                 "Module 204 feature_redundancy.csv":
                                     redundancy_file,
