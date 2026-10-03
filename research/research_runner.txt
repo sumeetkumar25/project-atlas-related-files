@@ -1898,6 +1898,212 @@ class ResearchRunner:
                             # generic run_dataframe() path.
                             continue
 
+                        elif module_id == "204":
+                            # ----------------------------------------------------
+                            # Module 204 is a file-driven feature redundancy/synergy
+                            # module.
+                            #
+                            # It consumes Module 203's predictive feature matrix.
+                            # Do NOT use the generic run_dataframe() path.
+                            # ----------------------------------------------------
+
+                            module203_output_dir = (
+                                self.export_manager.raw_dir
+                                / "module203"
+                                / dataset_name
+                            )
+
+                            matrix_path = (
+                                module203_output_dir
+                                / "predictive_feature_matrix.parquet"
+                            )
+
+                            # ----------------------------------------------------
+                            # Validate Module 203 input
+                            # ----------------------------------------------------
+
+                            if not matrix_path.exists():
+                                raise FileNotFoundError(
+                                    f"Module 204 requires Module 203 predictive "
+                                    f"feature matrix for {dataset_name}:\n"
+                                    f"{matrix_path}"
+                                )
+
+                            predictive_matrix_df = pd.read_parquet(matrix_path)
+
+                            if predictive_matrix_df.empty:
+                                raise ValueError(
+                                    f"Module 204 predictive matrix is empty for "
+                                    f"{dataset_name}:\n{matrix_path}"
+                                )
+
+                            if "timestamp" not in predictive_matrix_df.columns:
+                                raise ValueError(
+                                    f"Module 204 predictive matrix missing "
+                                    f"'timestamp' column for {dataset_name}:\n"
+                                    f"{matrix_path}"
+                                )
+
+                            # Feature columns = everything except timestamp/OHLCV.
+                            ignored_columns = {
+                                "timestamp",
+                                "date",
+                                "time",
+                                "index",
+                                "close",
+                                "open",
+                                "high",
+                                "low",
+                                "volume",
+                            }
+
+                            feature_columns = [
+                                c for c in predictive_matrix_df.columns
+                                if c not in ignored_columns
+                            ]
+
+                            if not feature_columns:
+                                raise ValueError(
+                                    f"Module 204 received no usable feature columns "
+                                    f"from Module 203 for {dataset_name}.\n"
+                                    f"Available columns: "
+                                    f"{list(predictive_matrix_df.columns)}"
+                                )
+
+                            # ----------------------------------------------------
+                            # Validate timestamp alignment against market dataset
+                            # ----------------------------------------------------
+
+                            if len(predictive_matrix_df) != len(market_df):
+                                raise ValueError(
+                                    f"Module 204 row-count mismatch for {dataset_name}: "
+                                    f"predictive_matrix={len(predictive_matrix_df)}, "
+                                    f"market_data={len(market_df)}"
+                                )
+
+                            predictive_timestamp = pd.to_datetime(
+                                predictive_matrix_df["timestamp"]
+                                .reset_index(drop=True)
+                            )
+
+                            market_timestamp = pd.to_datetime(
+                                market_df["timestamp"]
+                                .reset_index(drop=True)
+                            )
+
+                            if not predictive_timestamp.equals(market_timestamp):
+                                raise ValueError(
+                                    f"Module 204 timestamp alignment failed for "
+                                    f"{dataset_name}. Module 203 predictive matrix "
+                                    f"and raw market data are not aligned."
+                                )
+
+                            self.logger.info(
+                                f"    Module 204 received predictive matrix from "
+                                f"Module 203: {len(predictive_matrix_df):,} rows, "
+                                f"{len(feature_columns)} features"
+                            )
+
+                            self.logger.info(
+                                f"    Module 204 matrix path: {matrix_path}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 204 feature columns: {feature_columns}"
+                            )
+
+                            # ----------------------------------------------------
+                            # IMPORTANT:
+                            # Use Module 204's dedicated production interface.
+                            # ----------------------------------------------------
+
+                            result = module.run_redundancy_synergy(
+                                matrix_path=matrix_path,
+                                dataset_id=f"{module_id}_{dataset_name}",
+                                output_dir=module_output_dir
+                            )
+
+                            duration = time.time() - start_time
+
+                            # ----------------------------------------------------
+                            # Standardized artifact bookkeeping
+                            # ----------------------------------------------------
+
+                            if hasattr(result, "artifacts") and result.artifacts:
+                                self.artifact_store.put(
+                                    dataset_name,
+                                    module_id,
+                                    result.artifacts
+                                )
+
+                                self.logger.info(
+                                    f"    Stored {len(result.artifacts)} artifacts "
+                                    f"for {dataset_name}"
+                                )
+
+                            self.export_manager.export_module_outputs(
+                                module_id,
+                                dataset_name,
+                                result,
+                                module_output_dir
+                            )
+
+                            stats_df = self.export_manager.consolidate_statistics(
+                                module_id,
+                                dataset_name,
+                                result
+                            )
+
+                            stats_df["timestamp"] = datetime.now().isoformat()
+                            stats_df["duration"] = duration
+                            stats_df["version"] = module_info.get(
+                                "module_version",
+                                "unknown"
+                            )
+                            stats_df["has_features"] = self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            )
+                            stats_df["dataset"] = dataset_name
+
+                            all_stats.append(stats_df)
+
+                            success = result_succeeded(result)
+
+                            index_data.append({
+                                "module_id": module_id,
+                                "module_name": module_name,
+                                "dataset": dataset_name,
+                                "status": "PASS" if success else "FAIL",
+                                "csv_path": str(module_output_dir),
+                                "execution_time": duration,
+                                "rows": len(stats_df),
+                                "version": module_info.get(
+                                    "module_version",
+                                    "unknown"
+                                ),
+                                "timestamp": datetime.now().isoformat(),
+                                "dependencies": ",".join(dependencies),
+                                "has_features": self.artifact_store.has(
+                                    dataset_name,
+                                    module_id,
+                                    "features"
+                                ),
+                            })
+
+                            if success:
+                                self.completed_modules.add(
+                                    (dataset_name, module_id)
+                                )
+
+                            self.logger.info(
+                                f"    Module 204 completed for {dataset_name}"
+                            )
+
+                            # Do not fall through to generic run_dataframe().
+                            continue
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
