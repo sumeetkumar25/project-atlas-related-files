@@ -2419,27 +2419,43 @@ class ResearchRunner:
                             #
                             # The freeze gate downstream needs the true
                             # number of selected features, not the number
-                            # of statistics rows. Read it from the result's
-                            # summary_statistics dict, which the engine
-                            # always populates.
+                            # of statistics rows.
+                            #
+                            # IMPORTANT:
+                            # Module 205 exposes its summary statistics
+                            # through result.statistics. The top-level
+                            # result wrapper does NOT carry a
+                            # summary_statistics attribute. We therefore
+                            # read the count from result.statistics first,
+                            # and fall back to result.summary_statistics
+                            # only for compatibility with other wrappers.
                             # ----------------------------------------------------
 
                             module205_selected_count = 0
 
-                            result_summary = getattr(
-                                result,
-                                "summary_statistics",
-                                None,
-                            )
+                            # Module 205 exposes its statistics through result.statistics.
+                            result_statistics = getattr(result, "statistics", None)
 
-                            if isinstance(result_summary, dict):
+                            if isinstance(result_statistics, dict):
                                 module205_selected_count = int(
-                                    result_summary.get(
-                                        "selected_count",
-                                        0,
-                                    )
-                                    or 0
+                                    result_statistics.get("selected_count", 0) or 0
                                 )
+
+                            # Compatibility fallback: some result wrappers expose the
+                            # engine summary directly.
+                            if module205_selected_count == 0:
+                                result_summary = getattr(result, "summary_statistics", None)
+
+                                if isinstance(result_summary, dict):
+                                    module205_selected_count = int(
+                                        result_summary.get("selected_count", 0) or 0
+                                    )
+
+                            # Diagnostic log
+                            self.logger.info(
+                                f"    Module 205 selected_count for {dataset_name}: "
+                                f"{module205_selected_count}"
+                            )
 
                             index_data.append({
                                 "module_id": module_id,
@@ -3081,7 +3097,7 @@ class ResearchRunner:
         #
         # NOTE:
         # Module 205's "selected_count" is read from the index entry,
-        # which is populated from result.summary_statistics["selected_count"].
+        # which is populated from result.statistics["selected_count"].
         # The number of statistics rows is NOT the same as the number of
         # selected features and must not be used for this gate.
 
