@@ -1903,7 +1903,7 @@ class ResearchRunner:
                             # Module 204 is a file-driven feature redundancy/synergy
                             # module.
                             #
-                            # It consumes Module 203's predictive feature matrix.
+                            # It consumes Module 203's predictive INPUT matrix.
                             # Do NOT use the generic run_dataframe() path.
                             # ----------------------------------------------------
 
@@ -1915,7 +1915,8 @@ class ResearchRunner:
 
                             matrix_path = (
                                 module203_output_dir
-                                / "predictive_feature_matrix.parquet"
+                                / "input"
+                                / "predictive_input.parquet"
                             )
 
                             # ----------------------------------------------------
@@ -1925,7 +1926,7 @@ class ResearchRunner:
                             if not matrix_path.exists():
                                 raise FileNotFoundError(
                                     f"Module 204 requires Module 203 predictive "
-                                    f"feature matrix for {dataset_name}:\n"
+                                    f"input matrix for {dataset_name}:\n"
                                     f"{matrix_path}"
                                 )
 
@@ -1944,7 +1945,15 @@ class ResearchRunner:
                                     f"{matrix_path}"
                                 )
 
-                            # Feature columns = everything except timestamp/OHLCV.
+                            # ----------------------------------------------------
+                            # Module 203 predictive INPUT matrix contains the
+                            # candidate features before predictive KEEP/REMOVE
+                            # filtering.
+                            #
+                            # Module 204 must analyze these candidate features
+                            # for redundancy/synergy.
+                            # ----------------------------------------------------
+
                             ignored_columns = {
                                 "timestamp",
                                 "date",
@@ -1964,11 +1973,26 @@ class ResearchRunner:
 
                             if not feature_columns:
                                 raise ValueError(
-                                    f"Module 204 received no usable feature columns "
-                                    f"from Module 203 for {dataset_name}.\n"
+                                    f"Module 204 predictive input contains no "
+                                    f"candidate features for {dataset_name}.\n"
                                     f"Available columns: "
                                     f"{list(predictive_matrix_df.columns)}"
                                 )
+
+                            self.logger.info(
+                                f"    Module 204 received candidate matrix from "
+                                f"Module 203: {len(predictive_matrix_df):,} rows, "
+                                f"{len(feature_columns)} features"
+                            )
+
+                            self.logger.info(
+                                f"    Module 204 matrix path: {matrix_path}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 204 feature columns: "
+                                f"{feature_columns}"
+                            )
 
                             # ----------------------------------------------------
                             # Validate timestamp alignment against market dataset
@@ -1997,20 +2021,6 @@ class ResearchRunner:
                                     f"{dataset_name}. Module 203 predictive matrix "
                                     f"and raw market data are not aligned."
                                 )
-
-                            self.logger.info(
-                                f"    Module 204 received predictive matrix from "
-                                f"Module 203: {len(predictive_matrix_df):,} rows, "
-                                f"{len(feature_columns)} features"
-                            )
-
-                            self.logger.info(
-                                f"    Module 204 matrix path: {matrix_path}"
-                            )
-
-                            self.logger.info(
-                                f"    Module 204 feature columns: {feature_columns}"
-                            )
 
                             # ----------------------------------------------------
                             # IMPORTANT:
