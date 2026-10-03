@@ -2344,6 +2344,33 @@ class ResearchRunner:
                             duration = time.time() - start_time
 
                             # ----------------------------------------------------
+                            # Validation gate — inspect result.validation
+                            # ----------------------------------------------------
+                            # Module 205 must not be treated as successful
+                            # unless it explicitly reports that software
+                            # validation passed. This protects against a
+                            # module that runs to completion but produces a
+                            # degenerate output (e.g., zero selected features).
+
+                            validation = getattr(result, "validation", None)
+
+                            if validation is None:
+                                validation = getattr(result, "statistics", {})
+
+                            validation_passed = validation.get(
+                                "software_validation_passed",
+                                True
+                            )
+
+                            if validation_passed is False:
+                                success = False
+                                self.logger.error(
+                                    f"    Module {module_id} validation failed for {dataset_name}"
+                                )
+                            else:
+                                success = result_succeeded(result)
+
+                            # ----------------------------------------------------
                             # Standardized artifact bookkeeping
                             # ----------------------------------------------------
 
@@ -2386,8 +2413,6 @@ class ResearchRunner:
                             stats_df["dataset"] = dataset_name
 
                             all_stats.append(stats_df)
-
-                            success = result_succeeded(result)
 
                             index_data.append({
                                 "module_id": module_id,
