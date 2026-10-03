@@ -2414,6 +2414,33 @@ class ResearchRunner:
 
                             all_stats.append(stats_df)
 
+                            # ----------------------------------------------------
+                            # Extract selected_count from Module 205 result.
+                            #
+                            # The freeze gate downstream needs the true
+                            # number of selected features, not the number
+                            # of statistics rows. Read it from the result's
+                            # summary_statistics dict, which the engine
+                            # always populates.
+                            # ----------------------------------------------------
+
+                            module205_selected_count = 0
+
+                            result_summary = getattr(
+                                result,
+                                "summary_statistics",
+                                None,
+                            )
+
+                            if isinstance(result_summary, dict):
+                                module205_selected_count = int(
+                                    result_summary.get(
+                                        "selected_count",
+                                        0,
+                                    )
+                                    or 0
+                                )
+
                             index_data.append({
                                 "module_id": module_id,
                                 "module_name": module_name,
@@ -2433,6 +2460,7 @@ class ResearchRunner:
                                     module_id,
                                     "features"
                                 ),
+                                "selected_count": module205_selected_count,
                             })
 
                             self.logger.module_result(
@@ -3050,6 +3078,12 @@ class ResearchRunner:
         # is not freeze-ready:
         #   - any module failed validation, OR
         #   - Module 205 selected zero features.
+        #
+        # NOTE:
+        # Module 205's "selected_count" is read from the index entry,
+        # which is populated from result.summary_statistics["selected_count"].
+        # The number of statistics rows is NOT the same as the number of
+        # selected features and must not be used for this gate.
 
         failed_modules = sum(
             1 for r in self.results
@@ -3067,15 +3101,16 @@ class ResearchRunner:
 
         for entry in index_data:
             if entry.get("module_id") == "205":
-                stats_count = int(entry.get("rows", 0) or 0)
-                if stats_count > 0:
-                    module205_selected_features = stats_count
+                module205_selected_features = int(
+                    entry.get("selected_count", 0) or 0
+                )
                 break
 
         if module205_selected_features == 0:
             raise RuntimeError(
                 "Research campaign is not freeze-ready: "
-                "Module 205 selected zero features."
+                "Module 205 selected zero features. "
+                "Module 206 requires at least one selected feature."
             )
 
         # Generate campaign summary
