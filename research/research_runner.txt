@@ -2526,6 +2526,253 @@ class ResearchRunner:
                             # Do not fall through to generic run_dataframe().
                             continue
 
+                        elif module_id == "206":
+                            # ============================================================
+                            # MODULE 206 - SIGNAL CONSTRUCTION
+                            # ============================================================
+                            # Module 206 is file-driven.
+                            # NEVER route it through run_dataframe().
+                            #
+                            # Inputs:
+                            #   Module 205:
+                            #       selected_features.csv
+                            #       feature_scores.csv
+                            #
+                            #   Module 203:
+                            #       predictive_feature_matrix.parquet
+                            # ============================================================
+
+                            module205_dir = (
+                                self.export_manager.raw_dir
+                                / "module205"
+                                / dataset_name
+                            )
+
+                            module203_dir = (
+                                self.export_manager.raw_dir
+                                / "module203"
+                                / dataset_name
+                            )
+
+                            selected_features_path = (
+                                module205_dir / "selected_features.csv"
+                            )
+
+                            feature_scores_path = (
+                                module205_dir / "feature_scores.csv"
+                            )
+
+                            predictive_matrix_path = (
+                                module203_dir
+                                / "predictive_feature_matrix.parquet"
+                            )
+
+                            # ------------------------------------------------------------
+                            # Validate required files
+                            # ------------------------------------------------------------
+                            required_files = {
+                                "Module 205 selected_features.csv":
+                                    selected_features_path,
+                                "Module 205 feature_scores.csv":
+                                    feature_scores_path,
+                                "Module 203 predictive_feature_matrix.parquet":
+                                    predictive_matrix_path,
+                            }
+
+                            missing_files = [
+                                f"  - {label}: {path}"
+                                for label, path in required_files.items()
+                                if not path.exists()
+                            ]
+
+                            if missing_files:
+                                raise FileNotFoundError(
+                                    f"Module 206 is missing required upstream files "
+                                    f"for dataset {dataset_name}:\n"
+                                    + "\n".join(missing_files)
+                                )
+
+                            self.logger.info(
+                                f"    Module 206 received all required inputs "
+                                f"for {dataset_name}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 206 selected features: "
+                                f"{selected_features_path}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 206 feature scores: "
+                                f"{feature_scores_path}"
+                            )
+
+                            self.logger.info(
+                                f"    Module 206 predictive matrix: "
+                                f"{predictive_matrix_path}"
+                            )
+
+                            # ------------------------------------------------------------
+                            # IMPORTANT:
+                            # Module 206 has its own execution interface.
+                            # Do NOT call run_dataframe().
+                            #
+                            # The correct entry point is run_signal_construction().
+                            # ------------------------------------------------------------
+                            result = module.run_signal_construction(
+                                selected_features_path=selected_features_path,
+                                feature_scores_path=feature_scores_path,
+                                predictive_matrix_path=predictive_matrix_path,
+                                dataset_id=f"{module_id}_{dataset_name}",
+                                output_dir=module_output_dir,
+                            )
+
+                            duration = time.time() - start_time
+
+                            # ------------------------------------------------------------
+                            # Validation gate — fail the module when
+                            # software_validation_passed is False.
+                            # ------------------------------------------------------------
+                            validation = getattr(result, "validation", None)
+
+                            if validation is None:
+                                validation = getattr(result, "statistics", {})
+
+                            validation_passed = validation.get(
+                                "software_validation_passed",
+                                True
+                            )
+
+                            if validation_passed is False:
+                                success = False
+                                self.logger.error(
+                                    f"    Module {module_id} validation failed "
+                                    f"for {dataset_name}"
+                                )
+                            else:
+                                success = result_succeeded(result)
+
+                            # ------------------------------------------------------------
+                            # Store artifacts
+                            # ------------------------------------------------------------
+                            if hasattr(result, "artifacts") and result.artifacts:
+                                self.artifact_store.put(
+                                    dataset_name,
+                                    module_id,
+                                    result.artifacts
+                                )
+
+                                self.logger.info(
+                                    f"    Stored {len(result.artifacts)} artifacts "
+                                    f"for {dataset_name}"
+                                )
+
+                            # ------------------------------------------------------------
+                            # Export outputs
+                            # ------------------------------------------------------------
+                            self.export_manager.export_module_outputs(
+                                module_id,
+                                dataset_name,
+                                result,
+                                module_output_dir
+                            )
+
+                            # ------------------------------------------------------------
+                            # Statistics
+                            # ------------------------------------------------------------
+                            stats_df = self.export_manager.consolidate_statistics(
+                                module_id,
+                                dataset_name,
+                                result
+                            )
+
+                            stats_df["timestamp"] = datetime.now().isoformat()
+                            stats_df["duration"] = duration
+                            stats_df["version"] = module_info.get(
+                                "module_version",
+                                "unknown"
+                            )
+                            stats_df["has_features"] = self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            )
+                            stats_df["dataset"] = dataset_name
+
+                            all_stats.append(stats_df)
+
+                            # ------------------------------------------------------------
+                            # Index entry
+                            # ------------------------------------------------------------
+                            index_data.append({
+                                "module_id": module_id,
+                                "module_name": module_name,
+                                "dataset": dataset_name,
+                                "status": "PASS" if success else "FAIL",
+                                "csv_path": str(module_output_dir),
+                                "execution_time": duration,
+                                "rows": len(stats_df),
+                                "version": module_info.get(
+                                    "module_version",
+                                    "unknown"
+                                ),
+                                "timestamp": datetime.now().isoformat(),
+                                "dependencies": ",".join(dependencies),
+                                "has_features": self.artifact_store.has(
+                                    dataset_name,
+                                    module_id,
+                                    "features"
+                                ),
+                            })
+
+                            self.logger.module_result(
+                                module_id,
+                                dataset_name,
+                                success,
+                                duration,
+                                len(stats_df)
+                            )
+
+                            # ------------------------------------------------------------
+                            # Build and export Module 206 report
+                            # ------------------------------------------------------------
+                            report = self.summary_builder.build_module_report(
+                                module_id,
+                                module_info,
+                                result,
+                                dataset_name,
+                                duration
+                            )
+
+                            self.export_manager.export_report(
+                                f"{module_id}_{dataset_name}",
+                                report
+                            )
+
+                            self.results.append({
+                                "module_id": module_id,
+                                "dataset": dataset_name,
+                                "success": success,
+                                "duration": duration,
+                                "stats_count": len(stats_df)
+                            })
+
+                            # Only successful modules satisfy downstream
+                            # dependencies.
+                            if success:
+                                self.completed_modules.add(
+                                    (dataset_name, module_id)
+                                )
+
+                            self.logger.info(
+                                f"    Module 206 completed for {dataset_name}"
+                            )
+
+                            # CRITICAL:
+                            # Prevent Module 206 from falling through to the
+                            # generic run_dataframe() execution path.
+                            continue
+
                         else:
                             feature_df = self.dependency_injector.build_feature_dataframe(
                                 dataset_name,
