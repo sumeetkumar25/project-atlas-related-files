@@ -157,7 +157,7 @@ class ResearchRunner:
             
             for module_info in execution_order:
                 module_id = module_info['module_id']
-                print(f"DEBUG: module_id={module_id!r}, type={type(module_id).__name__}, module_name={module_info.get('module_name')!r}")
+                print(f"DEBUG: module_info={module_info!r}")
                 
                 # Module 112 is executed separately after all timeframe-specific
                 # modules have completed, because it requires 15m + 1h + 4h together.
