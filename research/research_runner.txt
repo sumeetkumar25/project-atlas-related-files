@@ -2772,6 +2772,215 @@ class ResearchRunner:
                         # generic run_dataframe() execution path.
                         continue
                     
+                    # ============================================================
+                    # MODULE 207 - SIGNAL CONFIDENCE
+                    # ============================================================
+                    # File-driven module: do not send it through run_dataframe().
+                    # This dispatch must remain outside `if dependencies:`.
+                    #
+                    # Module 207 consumes the outputs of Module 206:
+                    #   - signal_matrix.parquet
+                    #   - signal_components.csv
+                    # ============================================================
+                    if module_id == "207":
+                        self.logger.info(
+                            "    Using dedicated Module 207 signal confidence path"
+                        )
+
+                        module206_dir = (
+                            self.export_manager.raw_dir
+                            / "module206"
+                            / dataset_name
+                        )
+
+                        signal_matrix_path = (
+                            module206_dir / "signal_matrix.parquet"
+                        )
+
+                        signal_components_path = (
+                            module206_dir / "signal_components.csv"
+                        )
+
+                        required_files = {
+                            "signal_matrix": signal_matrix_path,
+                            "signal_components": signal_components_path,
+                        }
+
+                        missing_files = [
+                            f"{name}: {path}"
+                            for name, path in required_files.items()
+                            if not path.exists()
+                        ]
+
+                        if missing_files:
+                            raise FileNotFoundError(
+                                "Module 207 required input files are missing:\n"
+                                + "\n".join(f"  - {item}" for item in missing_files)
+                            )
+
+                        self.logger.info(
+                            f"    Module 207 signal matrix: "
+                            f"{signal_matrix_path}"
+                        )
+
+                        self.logger.info(
+                            f"    Module 207 signal components: "
+                            f"{signal_components_path}"
+                        )
+
+                        result = module.run_confidence(
+                            signal_matrix_path=signal_matrix_path,
+                            signal_components_path=signal_components_path,
+                            dataset_id=f"{module_id}_{dataset_name}",
+                            output_dir=module_output_dir,
+                        )
+
+                        duration = time.time() - start_time
+
+                        # ------------------------------------------------------------
+                        # Validation gate — fail the module when
+                        # software_validation_passed is False.
+                        # ------------------------------------------------------------
+                        validation = getattr(result, "validation", None)
+
+                        if validation is None:
+                            validation = getattr(result, "statistics", {})
+
+                        validation_passed = validation.get(
+                            "software_validation_passed",
+                            True
+                        )
+
+                        if validation_passed is False:
+                            success = False
+                            self.logger.error(
+                                f"    Module {module_id} validation failed "
+                                f"for {dataset_name}"
+                            )
+                        else:
+                            success = result_succeeded(result)
+
+                        # ------------------------------------------------------------
+                        # Store artifacts
+                        # ------------------------------------------------------------
+                        if hasattr(result, "artifacts") and result.artifacts:
+                            self.artifact_store.put(
+                                dataset_name,
+                                module_id,
+                                result.artifacts
+                            )
+
+                            self.logger.info(
+                                f"    Stored {len(result.artifacts)} artifacts "
+                                f"for {dataset_name}"
+                            )
+
+                        # ------------------------------------------------------------
+                        # Export outputs
+                        # ------------------------------------------------------------
+                        self.export_manager.export_module_outputs(
+                            module_id,
+                            dataset_name,
+                            result,
+                            module_output_dir
+                        )
+
+                        # ------------------------------------------------------------
+                        # Statistics
+                        # ------------------------------------------------------------
+                        stats_df = self.export_manager.consolidate_statistics(
+                            module_id,
+                            dataset_name,
+                            result
+                        )
+
+                        stats_df["timestamp"] = datetime.now().isoformat()
+                        stats_df["duration"] = duration
+                        stats_df["version"] = module_info.get(
+                            "module_version",
+                            "unknown"
+                        )
+                        stats_df["has_features"] = self.artifact_store.has(
+                            dataset_name,
+                            module_id,
+                            "features"
+                        )
+                        stats_df["dataset"] = dataset_name
+
+                        all_stats.append(stats_df)
+
+                        # ------------------------------------------------------------
+                        # Index entry
+                        # ------------------------------------------------------------
+                        index_data.append({
+                            "module_id": module_id,
+                            "module_name": module_name,
+                            "dataset": dataset_name,
+                            "status": "PASS" if success else "FAIL",
+                            "csv_path": str(module_output_dir),
+                            "execution_time": duration,
+                            "rows": len(stats_df),
+                            "version": module_info.get(
+                                "module_version",
+                                "unknown"
+                            ),
+                            "timestamp": datetime.now().isoformat(),
+                            "dependencies": ",".join(dependencies),
+                            "has_features": self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            ),
+                        })
+
+                        self.logger.module_result(
+                            module_id,
+                            dataset_name,
+                            success,
+                            duration,
+                            len(stats_df)
+                        )
+
+                        # ------------------------------------------------------------
+                        # Build and export Module 207 report
+                        # ------------------------------------------------------------
+                        report = self.summary_builder.build_module_report(
+                            module_id,
+                            module_info,
+                            result,
+                            dataset_name,
+                            duration
+                        )
+
+                        self.export_manager.export_report(
+                            f"{module_id}_{dataset_name}",
+                            report
+                        )
+
+                        self.results.append({
+                            "module_id": module_id,
+                            "dataset": dataset_name,
+                            "success": success,
+                            "duration": duration,
+                            "stats_count": len(stats_df)
+                        })
+
+                        # Only successful modules satisfy downstream
+                        # dependencies.
+                        if success:
+                            self.completed_modules.add(
+                                (dataset_name, module_id)
+                            )
+
+                        self.logger.info(
+                            f"    Module 207 completed for {dataset_name}"
+                        )
+
+                        # CRITICAL:
+                        # Prevent Module 207 from falling through to the
+                        # generic run_dataframe() execution path.
+                        continue
+                    
                     # ----------------------------------------------------
                     # Prepare module-specific market DataFrame
                     # ----------------------------------------------------
@@ -3321,7 +3530,8 @@ class ResearchRunner:
         # Abort before writing the final campaign summary when the campaign
         # is not freeze-ready:
         #   - any module failed validation, OR
-        #   - Module 205 selected zero features.
+        #   - Module 205 selected zero features (only when Module 205 was
+        #     part of this run).
         #
         # NOTE:
         # Module 205's "selected_count" is read from the index entry,
@@ -3340,22 +3550,33 @@ class ResearchRunner:
                 f"{failed_modules} module(s) failed validation."
             )
 
-        # Check Module 205 selection outcome via the index entries.
-        module205_selected_features = 0
+        # ------------------------------------------------------------
+        # Check Module 205 selection only when Module 205 is
+        # part of the current execution order.
+        #
+        # Partial runs such as --modules 207 must not fail merely
+        # because Module 205 was not executed in this run.
+        # ------------------------------------------------------------
+        module205_in_run = any(
+            str(module_info.get("module_id")) == "205"
+            for module_info in execution_order
+        )
 
-        for entry in index_data:
-            if entry.get("module_id") == "205":
-                module205_selected_features = int(
-                    entry.get("selected_count", 0) or 0
+        if module205_in_run:
+            module205_selected_features = 0
+
+            for entry in index_data:
+                if str(entry.get("module_id")) == "205":
+                    module205_selected_features += int(
+                        entry.get("selected_count", 0) or 0
+                    )
+
+            if module205_selected_features == 0:
+                raise RuntimeError(
+                    "Research campaign is not freeze-ready: "
+                    "Module 205 selected zero features. "
+                    "Module 206 requires at least one selected feature."
                 )
-                break
-
-        if module205_selected_features == 0:
-            raise RuntimeError(
-                "Research campaign is not freeze-ready: "
-                "Module 205 selected zero features. "
-                "Module 206 requires at least one selected feature."
-            )
 
         # Generate campaign summary
         summary = self.summary_builder.build_campaign_summary(
