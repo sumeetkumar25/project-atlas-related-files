@@ -2626,6 +2626,41 @@ class ResearchRunner:
                             output_dir=module_output_dir,
                         )
 
+                        # Ensure Module 206 component artifacts carry the actual signal timestamps
+                        # before ResearchRunner stores and exports them.
+                        artifacts = getattr(result, "artifacts", None)
+
+                        if not isinstance(artifacts, dict):
+                            raise TypeError(
+                                "Module 206 returned no usable artifacts dictionary; "
+                                "cannot verify component timestamps."
+                            )
+
+                        signal_matrix_df = artifacts.get("signal_matrix")
+                        components_df = artifacts.get("signal_components")
+
+                        if not isinstance(signal_matrix_df, pd.DataFrame):
+                            raise TypeError(
+                                "Module 206 signal_matrix artifact is missing or is not a DataFrame."
+                            )
+
+                        if not isinstance(components_df, pd.DataFrame):
+                            raise TypeError(
+                                "Module 206 signal_components artifact is missing or is not a DataFrame."
+                            )
+
+                        if "timestamp" not in signal_matrix_df.columns:
+                            raise ValueError(
+                                "Module 206 signal_matrix has no timestamp column."
+                            )
+
+                        if len(signal_matrix_df) != len(components_df):
+                            raise ValueError(
+                                "Module 206 component/signal row-count mismatch: "
+                                f"components={len(components_df)}, "
+                                f"signal_matrix={len(signal_matrix_df)}"
+                            )
+
                         duration = time.time() - start_time
 
                         # ------------------------------------------------------------
