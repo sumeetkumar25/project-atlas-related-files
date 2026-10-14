@@ -3205,6 +3205,10 @@ class ResearchRunner:
                     #
                     # Module 209 consumes the output of Module 208:
                     #   - Module 208 portfolio_matrix.parquet
+                    #
+                    # The portfolio matrix does not contain OHLCV prices.
+                    # We join the matching timeframe's close prices on
+                    # timestamp before calling the risk engine.
                     # ============================================================
                     if module_id == "209":
                         self.logger.info(
@@ -3232,8 +3236,161 @@ class ResearchRunner:
                             f"{portfolio_matrix_path}"
                         )
 
+                        # ------------------------------------------------------------
+                        # MODULE 209 FIX: Join OHLCV close prices by timestamp
+                        #
+                        # Do not modify Module 208's original portfolio matrix.
+                        # We construct an enriched portfolio matrix that
+                        # includes the close price at each timestamp so
+                        # the risk engine can compute returns.
+                        # ------------------------------------------------------------
+                        parquet_price_path = (
+                            self.data_path / f"BTCUSD_{dataset_name}.parquet"
+                        )
+
+                        csv_price_path = (
+                            self.data_path / f"BTCUSD_{dataset_name}.csv"
+                        )
+
+                        price_path = (
+                            parquet_price_path
+                            if parquet_price_path.exists()
+                            else csv_price_path
+                        )
+
+                        if not price_path.exists():
+                            raise FileNotFoundError(
+                                f"Module 209 OHLCV file not found for "
+                                f"{dataset_name}. Checked: "
+                                f"{parquet_price_path} and {csv_price_path}"
+                            )
+
+                        # Read Module 208 portfolio data and matching timeframe prices.
+                        portfolio_df = pd.read_parquet(portfolio_matrix_path)
+
+                        if price_path.suffix.lower() == ".parquet":
+                            price_df = pd.read_parquet(price_path)
+                        else:
+                            price_df = pd.read_csv(price_path)
+
+                        # Validate required columns.
+                        required_portfolio = {
+                            "timestamp",
+                            "desired_position",
+                            "actual_position",
+                            "position_size",
+                        }
+
+                        required_prices = {"timestamp", "close"}
+
+                        missing_portfolio = (
+                            required_portfolio - set(portfolio_df.columns)
+                        )
+
+                        missing_prices = (
+                            required_prices - set(price_df.columns)
+                        )
+
+                        if missing_portfolio:
+                            raise ValueError(
+                                f"Module 209 portfolio matrix for "
+                                f"{dataset_name} missing required columns: "
+                                f"{sorted(missing_portfolio)}. "
+                                f"Available: {sorted(portfolio_df.columns)}"
+                            )
+
+                        if missing_prices:
+                            raise ValueError(
+                                f"Module 209 OHLCV file for {dataset_name} "
+                                f"missing required columns: "
+                                f"{sorted(missing_prices)}. "
+                                f"Available: {sorted(price_df.columns)}"
+                            )
+
+                        # ------------------------------------------------------------
+                        # Normalize timestamps on both sides before the join.
+                        # Portfolio timestamps come from Module 208 and are
+                        # already normalized; the price timestamps come from
+                        # the raw OHLCV source and may be strings.
+                        # ------------------------------------------------------------
+                        portfolio_df["timestamp"] = pd.to_datetime(
+                            portfolio_df["timestamp"],
+                            utc=True,
+                            errors="coerce",
+                        )
+
+                        price_df["timestamp"] = pd.to_datetime(
+                            price_df["timestamp"],
+                            utc=True,
+                            errors="coerce",
+                        )
+
+                        portfolio_df = portfolio_df.dropna(
+                            subset=["timestamp"]
+                        )
+
+                        price_df = price_df.dropna(subset=["timestamp"])
+
+                        # ------------------------------------------------------------
+                        # Join on timestamp. Keep every portfolio row so the
+                        # risk engine sees the same row count as Module 208.
+                        # ------------------------------------------------------------
+                        portfolio_df = portfolio_df.merge(
+                            price_df[["timestamp", "close"]],
+                            on="timestamp",
+                            how="left",
+                            validate="one_to_one",
+                        )
+
+                        # ------------------------------------------------------------
+                        # Fail loudly if the join dropped prices. A missing
+                        # close price would silently corrupt risk metrics.
+                        # ------------------------------------------------------------
+                        missing_close_count = int(
+                            portfolio_df["close"].isna().sum()
+                        )
+
+                        if missing_close_count > 0:
+                            raise RuntimeError(
+                                f"Module 209 price join failed for "
+                                f"{dataset_name}: {missing_close_count} "
+                                f"portfolio rows have no matching close "
+                                f"price after joining on timestamp."
+                            )
+
+                        # ------------------------------------------------------------
+                        # Materialize the enriched portfolio matrix in the
+                        # module's own input directory so the risk engine
+                        # consumes a concrete file path.
+                        # ------------------------------------------------------------
+                        module209_input_dir = (
+                            module_output_dir / "input"
+                        )
+
+                        module209_input_dir.mkdir(
+                            parents=True,
+                            exist_ok=True,
+                        )
+
+                        enriched_portfolio_path = (
+                            module209_input_dir
+                            / "portfolio_matrix_with_prices.parquet"
+                        )
+
+                        portfolio_df.to_parquet(
+                            enriched_portfolio_path,
+                            index=False,
+                        )
+
+                        self.logger.info(
+                            f"    Module 209 enriched portfolio matrix: "
+                            f"{enriched_portfolio_path} "
+                            f"({len(portfolio_df):,} rows, "
+                            f"close joined for all rows)"
+                        )
+
                         result = module.run_risk_engine(
-                            portfolio_matrix_path=portfolio_matrix_path,
+                            portfolio_matrix_path=enriched_portfolio_path,
                             dataset_id=f"209_{dataset_name}",
                             output_dir=module_output_dir,
                         )
