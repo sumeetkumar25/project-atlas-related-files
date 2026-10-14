@@ -3232,8 +3232,62 @@ class ResearchRunner:
                             f"{portfolio_matrix_path}"
                         )
 
+                        # Build a temporary Module 209 input with close prices; do not change Module 208.
+                        parquet_price_path = self.data_path / f"BTCUSD_{dataset_name}.parquet"
+                        csv_price_path = self.data_path / f"BTCUSD_{dataset_name}.csv"
+                        price_path = parquet_price_path if parquet_price_path.exists() else csv_price_path
+                        if not price_path.exists():
+                            raise FileNotFoundError(
+                                f"Module 209 requires OHLCV prices for {dataset_name}; "
+                                f"checked {parquet_price_path} and {csv_price_path}"
+                            )
+
+                        portfolio_df = pd.read_parquet(portfolio_matrix_path)
+                        price_df = pd.read_parquet(price_path) if price_path.suffix.lower() == ".parquet" else pd.read_csv(price_path)
+                        missing_portfolio = {"timestamp", "actual_position", "desired_position"} - set(portfolio_df.columns)
+                        missing_price = {"timestamp", "close"} - set(price_df.columns)
+                        if missing_portfolio:
+                            raise ValueError(f"Module 208 matrix missing columns: {sorted(missing_portfolio)}")
+                        if missing_price:
+                            raise ValueError(f"Module 209 OHLCV file missing columns: {sorted(missing_price)}")
+
+                        portfolio_df = portfolio_df.copy()
+                        price_df = price_df[["timestamp", "close"]].copy()
+                        portfolio_df["timestamp"] = pd.to_datetime(portfolio_df["timestamp"], errors="coerce")
+                        price_df["timestamp"] = pd.to_datetime(price_df["timestamp"], errors="coerce")
+                        if portfolio_df["timestamp"].isna().any() or price_df["timestamp"].isna().any():
+                            raise ValueError(f"Module 209 found invalid timestamps for {dataset_name}")
+                        if portfolio_df["timestamp"].duplicated().any() or price_df["timestamp"].duplicated().any():
+                            raise ValueError(f"Module 209 found duplicate timestamps for {dataset_name}")
+
+                        expected_rows = len(portfolio_df)
+                        expected_timestamps = portfolio_df["timestamp"].sort_values(kind="stable").reset_index(drop=True)
+                        aligned_df = portfolio_df.merge(
+                            price_df, on="timestamp", how="left", validate="one_to_one",
+                            indicator=True, sort=False
+                        )
+                        missing_prices = int((aligned_df["_merge"] != "both").sum())
+                        if missing_prices:
+                            raise ValueError(f"Module 209: {missing_prices} portfolio rows lack close prices for {dataset_name}")
+                        aligned_df = aligned_df.drop(columns="_merge")
+                        if len(aligned_df) != expected_rows:
+                            raise ValueError(f"Module 209 row count changed during join: {expected_rows} -> {len(aligned_df)}")
+                        aligned_df["close"] = pd.to_numeric(aligned_df["close"], errors="coerce")
+                        if aligned_df["close"].isna().any() or (aligned_df["close"] <= 0).any():
+                            raise ValueError(f"Module 209 has invalid close prices for {dataset_name}")
+                        aligned_df = aligned_df.sort_values("timestamp", kind="stable").reset_index(drop=True)
+                        if not aligned_df["timestamp"].equals(expected_timestamps):
+                            raise ValueError(f"Module 209 timestamp alignment check failed for {dataset_name}")
+
+                        risk_input_dir = module_output_dir / "input"
+                        risk_input_dir.mkdir(parents=True, exist_ok=True)
+                        risk_input_path = risk_input_dir / "portfolio_with_prices.parquet"
+                        aligned_df.to_parquet(risk_input_path, index=False)
+                        self.logger.info(f"    Module 209 close prices joined from {price_path}: {len(aligned_df):,} rows; 0 missing")
+                        self.logger.info(f"    Module 209 temporary risk input: {risk_input_path}")
+
                         result = module.run_risk_engine(
-                            portfolio_matrix_path=portfolio_matrix_path,
+                            portfolio_matrix_path=risk_input_path,
                             dataset_id=f"209_{dataset_name}",
                             output_dir=module_output_dir,
                         )
