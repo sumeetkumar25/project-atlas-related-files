@@ -2981,6 +2981,409 @@ class ResearchRunner:
                         # generic run_dataframe() execution path.
                         continue
                     
+                    # ============================================================
+                    # MODULE 208 - PORTFOLIO CONSTRUCTION
+                    # ============================================================
+                    # File-driven module: do not send it through run_dataframe().
+                    # This dispatch must remain outside `if dependencies:`.
+                    #
+                    # Module 208 consumes the outputs of Module 206 and
+                    # Module 207:
+                    #   - Module 206 signal_matrix.parquet
+                    #   - Module 207 confidence_matrix.parquet
+                    # ============================================================
+                    if module_id == "208":
+                        self.logger.info(
+                            "    Using dedicated Module 208 portfolio construction path"
+                        )
+
+                        module206_dir = (
+                            self.export_manager.raw_dir
+                            / "module206"
+                            / dataset_name
+                        )
+
+                        module207_dir = (
+                            self.export_manager.raw_dir
+                            / "module207"
+                            / dataset_name
+                        )
+
+                        signal_matrix_path = (
+                            module206_dir / "signal_matrix.parquet"
+                        )
+
+                        confidence_matrix_path = (
+                            module207_dir / "confidence_matrix.parquet"
+                        )
+
+                        required_files = {
+                            "signal_matrix": signal_matrix_path,
+                            "confidence_matrix": confidence_matrix_path,
+                        }
+
+                        missing_files = [
+                            f"{name}: {path}"
+                            for name, path in required_files.items()
+                            if not path.exists()
+                        ]
+
+                        if missing_files:
+                            raise FileNotFoundError(
+                                "Module 208 required input files are missing:\n"
+                                + "\n".join(f"  - {item}" for item in missing_files)
+                            )
+
+                        self.logger.info(
+                            f"    Module 208 signal matrix: "
+                            f"{signal_matrix_path}"
+                        )
+
+                        self.logger.info(
+                            f"    Module 208 confidence matrix: "
+                            f"{confidence_matrix_path}"
+                        )
+
+                        result = module.run_portfolio(
+                            signal_matrix_path=signal_matrix_path,
+                            confidence_matrix_path=confidence_matrix_path,
+                            dataset_id=f"{module_id}_{dataset_name}",
+                            output_dir=module_output_dir,
+                        )
+
+                        duration = time.time() - start_time
+
+                        # ------------------------------------------------------------
+                        # Validation gate — fail the module when
+                        # software_validation_passed is False.
+                        # ------------------------------------------------------------
+                        validation = getattr(result, "validation", None)
+
+                        if validation is None:
+                            validation = getattr(result, "statistics", {})
+
+                        validation_passed = validation.get(
+                            "software_validation_passed",
+                            True
+                        )
+
+                        if validation_passed is False:
+                            success = False
+                            self.logger.error(
+                                f"    Module {module_id} validation failed "
+                                f"for {dataset_name}"
+                            )
+                        else:
+                            success = result_succeeded(result)
+
+                        # ------------------------------------------------------------
+                        # Store artifacts
+                        # ------------------------------------------------------------
+                        if hasattr(result, "artifacts") and result.artifacts:
+                            self.artifact_store.put(
+                                dataset_name,
+                                module_id,
+                                result.artifacts
+                            )
+
+                            self.logger.info(
+                                f"    Stored {len(result.artifacts)} artifacts "
+                                f"for {dataset_name}"
+                            )
+
+                        # ------------------------------------------------------------
+                        # Export outputs
+                        # ------------------------------------------------------------
+                        self.export_manager.export_module_outputs(
+                            module_id,
+                            dataset_name,
+                            result,
+                            module_output_dir
+                        )
+
+                        # ------------------------------------------------------------
+                        # Statistics
+                        # ------------------------------------------------------------
+                        stats_df = self.export_manager.consolidate_statistics(
+                            module_id,
+                            dataset_name,
+                            result
+                        )
+
+                        stats_df["timestamp"] = datetime.now().isoformat()
+                        stats_df["duration"] = duration
+                        stats_df["version"] = module_info.get(
+                            "module_version",
+                            "unknown"
+                        )
+                        stats_df["has_features"] = self.artifact_store.has(
+                            dataset_name,
+                            module_id,
+                            "features"
+                        )
+                        stats_df["dataset"] = dataset_name
+
+                        all_stats.append(stats_df)
+
+                        # ------------------------------------------------------------
+                        # Index entry
+                        # ------------------------------------------------------------
+                        index_data.append({
+                            "module_id": module_id,
+                            "module_name": module_name,
+                            "dataset": dataset_name,
+                            "status": "PASS" if success else "FAIL",
+                            "csv_path": str(module_output_dir),
+                            "execution_time": duration,
+                            "rows": len(stats_df),
+                            "version": module_info.get(
+                                "module_version",
+                                "unknown"
+                            ),
+                            "timestamp": datetime.now().isoformat(),
+                            "dependencies": ",".join(dependencies),
+                            "has_features": self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            ),
+                        })
+
+                        self.logger.module_result(
+                            module_id,
+                            dataset_name,
+                            success,
+                            duration,
+                            len(stats_df)
+                        )
+
+                        # ------------------------------------------------------------
+                        # Build and export Module 208 report
+                        # ------------------------------------------------------------
+                        report = self.summary_builder.build_module_report(
+                            module_id,
+                            module_info,
+                            result,
+                            dataset_name,
+                            duration
+                        )
+
+                        self.export_manager.export_report(
+                            f"{module_id}_{dataset_name}",
+                            report
+                        )
+
+                        self.results.append({
+                            "module_id": module_id,
+                            "dataset": dataset_name,
+                            "success": success,
+                            "duration": duration,
+                            "stats_count": len(stats_df)
+                        })
+
+                        # Only successful modules satisfy downstream
+                        # dependencies.
+                        if success:
+                            self.completed_modules.add(
+                                (dataset_name, module_id)
+                            )
+
+                        self.logger.info(
+                            f"    Module 208 completed for {dataset_name}"
+                        )
+
+                        # CRITICAL:
+                        # Prevent Module 208 from falling through to the
+                        # generic run_dataframe() execution path.
+                        continue
+                    
+                    # ============================================================
+                    # MODULE 209 - RISK ENGINE
+                    # ============================================================
+                    # File-driven module: consume Module 208 portfolio output.
+                    # This dispatch must remain outside `if dependencies:`.
+                    #
+                    # Module 209 consumes the output of Module 208:
+                    #   - Module 208 portfolio_matrix.parquet
+                    # ============================================================
+                    if module_id == "209":
+                        self.logger.info(
+                            "    Using dedicated Module 209 risk engine path"
+                        )
+
+                        module208_dir = (
+                            self.export_manager.raw_dir
+                            / "module208"
+                            / dataset_name
+                        )
+
+                        portfolio_matrix_path = (
+                            module208_dir / "portfolio_matrix.parquet"
+                        )
+
+                        if not portfolio_matrix_path.exists():
+                            raise FileNotFoundError(
+                                f"Module 209 requires Module 208 portfolio output: "
+                                f"{portfolio_matrix_path}"
+                            )
+
+                        self.logger.info(
+                            f"    Module 209 portfolio matrix: "
+                            f"{portfolio_matrix_path}"
+                        )
+
+                        result = module.run_risk_engine(
+                            portfolio_matrix_path=portfolio_matrix_path,
+                            dataset_id=f"209_{dataset_name}",
+                            output_dir=module_output_dir,
+                        )
+
+                        duration = time.time() - start_time
+
+                        # ------------------------------------------------------------
+                        # Validation gate — fail the module when
+                        # software_validation_passed is False.
+                        # ------------------------------------------------------------
+                        validation = getattr(result, "validation", None)
+
+                        if validation is None:
+                            validation = getattr(result, "statistics", {})
+
+                        validation_passed = validation.get(
+                            "software_validation_passed",
+                            True
+                        )
+
+                        if validation_passed is False:
+                            success = False
+                            self.logger.error(
+                                f"    Module {module_id} validation failed "
+                                f"for {dataset_name}"
+                            )
+                        else:
+                            success = result_succeeded(result)
+
+                        # ------------------------------------------------------------
+                        # Store artifacts
+                        # ------------------------------------------------------------
+                        if hasattr(result, "artifacts") and result.artifacts:
+                            self.artifact_store.put(
+                                dataset_name,
+                                module_id,
+                                result.artifacts
+                            )
+
+                            self.logger.info(
+                                f"    Stored {len(result.artifacts)} artifacts "
+                                f"for {dataset_name}"
+                            )
+
+                        # ------------------------------------------------------------
+                        # Export outputs
+                        # ------------------------------------------------------------
+                        self.export_manager.export_module_outputs(
+                            module_id,
+                            dataset_name,
+                            result,
+                            module_output_dir
+                        )
+
+                        # ------------------------------------------------------------
+                        # Statistics
+                        # ------------------------------------------------------------
+                        stats_df = self.export_manager.consolidate_statistics(
+                            module_id,
+                            dataset_name,
+                            result
+                        )
+
+                        stats_df["timestamp"] = datetime.now().isoformat()
+                        stats_df["duration"] = duration
+                        stats_df["version"] = module_info.get(
+                            "module_version",
+                            "unknown"
+                        )
+                        stats_df["has_features"] = self.artifact_store.has(
+                            dataset_name,
+                            module_id,
+                            "features"
+                        )
+                        stats_df["dataset"] = dataset_name
+
+                        all_stats.append(stats_df)
+
+                        # ------------------------------------------------------------
+                        # Index entry
+                        # ------------------------------------------------------------
+                        index_data.append({
+                            "module_id": module_id,
+                            "module_name": module_name,
+                            "dataset": dataset_name,
+                            "status": "PASS" if success else "FAIL",
+                            "csv_path": str(module_output_dir),
+                            "execution_time": duration,
+                            "rows": len(stats_df),
+                            "version": module_info.get(
+                                "module_version",
+                                "unknown"
+                            ),
+                            "timestamp": datetime.now().isoformat(),
+                            "dependencies": ",".join(dependencies),
+                            "has_features": self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            ),
+                        })
+
+                        self.logger.module_result(
+                            module_id,
+                            dataset_name,
+                            success,
+                            duration,
+                            len(stats_df)
+                        )
+
+                        # ------------------------------------------------------------
+                        # Build and export Module 209 report
+                        # ------------------------------------------------------------
+                        report = self.summary_builder.build_module_report(
+                            module_id,
+                            module_info,
+                            result,
+                            dataset_name,
+                            duration
+                        )
+
+                        self.export_manager.export_report(
+                            f"{module_id}_{dataset_name}",
+                            report
+                        )
+
+                        self.results.append({
+                            "module_id": module_id,
+                            "dataset": dataset_name,
+                            "success": success,
+                            "duration": duration,
+                            "stats_count": len(stats_df)
+                        })
+
+                        # Only successful modules satisfy downstream
+                        # dependencies.
+                        if success:
+                            self.completed_modules.add(
+                                (dataset_name, module_id)
+                            )
+
+                        self.logger.info(
+                            f"    Module 209 completed for {dataset_name}"
+                        )
+
+                        # CRITICAL:
+                        # Prevent Module 209 from falling through to the
+                        # generic run_dataframe() execution path.
+                        continue
+                    
                     # ----------------------------------------------------
                     # Prepare module-specific market DataFrame
                     # ----------------------------------------------------
