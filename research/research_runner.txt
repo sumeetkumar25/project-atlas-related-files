@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 from datetime import datetime
 import pandas as pd
+import numpy as np
 import traceback
 import json
 
@@ -3242,7 +3243,7 @@ class ResearchRunner:
                     #   - Module 208 portfolio_matrix.parquet
                     #
                     # The portfolio matrix does not contain OHLCV prices.
-                    # We join the matching timeframe's close prices on
+                    # We join the matching timeframe's price columns on
                     # timestamp before calling the risk engine.
                     # ============================================================
                     if module_id == "209":
@@ -3272,12 +3273,16 @@ class ResearchRunner:
                         )
 
                         # ------------------------------------------------------------
-                        # MODULE 209 FIX: Join OHLCV close prices by timestamp
+                        # MODULE 209 FIX: Join OHLCV price columns by timestamp
                         #
                         # Do not modify Module 208's original portfolio matrix.
                         # We construct an enriched portfolio matrix that
-                        # includes the close price at each timestamp so
-                        # the risk engine can compute returns.
+                        # includes the price columns at each timestamp so
+                        # the risk engine can compute returns and downside risk.
+                        #
+                        # The merge below preserves the full price context
+                        # (open, high, low, close, volume) whenever the
+                        # source OHLCV dataset provides those columns.
                         # ------------------------------------------------------------
                         parquet_price_path = (
                             self.data_path / f"BTCUSD_{dataset_name}.parquet"
@@ -3316,14 +3321,8 @@ class ResearchRunner:
                             "position_size",
                         }
 
-                        required_prices = {"timestamp", "close"}
-
                         missing_portfolio = (
                             required_portfolio - set(portfolio_df.columns)
-                        )
-
-                        missing_prices = (
-                            required_prices - set(price_df.columns)
                         )
 
                         if missing_portfolio:
@@ -3334,13 +3333,33 @@ class ResearchRunner:
                                 f"Available: {sorted(portfolio_df.columns)}"
                             )
 
-                        if missing_prices:
+                        # ------------------------------------------------------------
+                        # PRESERVE OHLC PRICES
+                        #
+                        # Module 209 requires open and close. It carries
+                        # high, low and volume through to the enriched
+                        # portfolio matrix whenever the source OHLCV file
+                        # provides them.
+                        # ------------------------------------------------------------
+                        required_price_columns = {"timestamp", "open", "close"}
+
+                        missing_price_columns = (
+                            required_price_columns - set(price_df.columns)
+                        )
+
+                        if missing_price_columns:
                             raise ValueError(
-                                f"Module 209 OHLCV file for {dataset_name} "
-                                f"missing required columns: "
-                                f"{sorted(missing_prices)}. "
-                                f"Available: {sorted(price_df.columns)}"
+                                f"Module 209 OHLCV file is missing required price columns: "
+                                f"{sorted(missing_price_columns)}"
                             )
+
+                        price_columns = ["timestamp"] + [
+                            col
+                            for col in ("open", "high", "low", "close", "volume")
+                            if col in price_df.columns
+                        ]
+
+                        price_df = price_df[price_columns].copy()
 
                         # ------------------------------------------------------------
                         # Normalize timestamps on both sides before the join.
@@ -3369,9 +3388,13 @@ class ResearchRunner:
                         # ------------------------------------------------------------
                         # Join on timestamp. Keep every portfolio row so the
                         # risk engine sees the same row count as Module 208.
+                        #
+                        # IMPORTANT:
+                        # We carry every preserved price column through the
+                        # merge, not just close.
                         # ------------------------------------------------------------
                         portfolio_df = portfolio_df.merge(
-                            price_df[["timestamp", "close"]],
+                            price_df,
                             on="timestamp",
                             how="left",
                             validate="one_to_one",
@@ -3379,7 +3402,7 @@ class ResearchRunner:
 
                         # ------------------------------------------------------------
                         # Fail loudly if the join dropped prices. A missing
-                        # close price would silently corrupt risk metrics.
+                        # price value would silently corrupt risk metrics.
                         # ------------------------------------------------------------
                         missing_close_count = int(
                             portfolio_df["close"].isna().sum()
@@ -3392,6 +3415,36 @@ class ResearchRunner:
                                 f"portfolio rows have no matching close "
                                 f"price after joining on timestamp."
                             )
+
+                        # ------------------------------------------------------------
+                        # VALIDATE ALIGNED PRICE COLUMNS
+                        #
+                        # Both open and close must be numeric, non-null,
+                        # strictly positive and finite for every row.
+                        # A violation here would silently corrupt the
+                        # risk engine's return and drawdown calculations.
+                        # ------------------------------------------------------------
+                        aligned_df = portfolio_df
+
+                        for price_col in ("open", "close"):
+                            aligned_df[price_col] = pd.to_numeric(
+                                aligned_df[price_col],
+                                errors="coerce"
+                            )
+
+                            price_values = aligned_df[price_col].to_numpy(
+                                dtype=float
+                            )
+
+                            if (
+                                not pd.Series(price_values).notna().all()
+                                or not (price_values > 0).all()
+                                or not np.isfinite(price_values).all()
+                            ):
+                                raise ValueError(
+                                    f"Module 209 found invalid {price_col} prices "
+                                    f"for {dataset_name}"
+                                )
 
                         # ------------------------------------------------------------
                         # Materialize the enriched portfolio matrix in the
@@ -3412,7 +3465,7 @@ class ResearchRunner:
                             / "portfolio_matrix_with_prices.parquet"
                         )
 
-                        portfolio_df.to_parquet(
+                        aligned_df.to_parquet(
                             enriched_portfolio_path,
                             index=False,
                         )
@@ -3420,8 +3473,8 @@ class ResearchRunner:
                         self.logger.info(
                             f"    Module 209 enriched portfolio matrix: "
                             f"{enriched_portfolio_path} "
-                            f"({len(portfolio_df):,} rows, "
-                            f"close joined for all rows)"
+                            f"({len(aligned_df):,} rows, "
+                            f"price columns joined: {price_columns})"
                         )
 
                         result = module.run_risk_engine(
