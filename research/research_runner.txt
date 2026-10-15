@@ -3687,12 +3687,43 @@ class ResearchRunner:
                     # ----------------------------------------------------
                     # Run module
                     # ----------------------------------------------------
-                    result = self.module_loader.run_module(
-                        module,
-                        module_market_df,
-                        dataset_id=f"{module_id}_{dataset_name}",
-                        output_dir=module_output_dir
-                    )
+                    if module_id == "210":
+                        self.logger.info(
+                            "    Using dedicated Module 210 execution simulation path"
+                        )
+
+                        # Module 210 requires Module 209's risk-adjusted portfolio,
+                        # not the raw OHLCV market DataFrame.
+                        risk_portfolio_path = (
+                            self.export_manager.raw_dir
+                            / "module209"
+                            / dataset_name
+                            / "risk_adjusted_portfolio.parquet"
+                        )
+
+                        if not risk_portfolio_path.exists():
+                            raise FileNotFoundError(
+                                "Module 210 requires Module 209 risk-adjusted output: "
+                                f"{risk_portfolio_path}. Run Module 209 first."
+                            )
+
+                        self.logger.info(
+                            f"    Module 210 portfolio input: {risk_portfolio_path}"
+                        )
+
+                        result = module.run_execution(
+                            portfolio_matrix_path=risk_portfolio_path,
+                            dataset_id=f"210_{dataset_name}",
+                            output_dir=module_output_dir,
+                        )
+                    else:
+                        # Preserve normal execution for all other modules.
+                        result = self.module_loader.run_module(
+                            module,
+                            module_market_df,
+                            dataset_id=f"{module_id}_{dataset_name}",
+                            output_dir=module_output_dir
+                        )
                     
                     duration = time.time() - start_time
                     
