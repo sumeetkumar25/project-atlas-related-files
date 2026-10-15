@@ -3716,6 +3716,46 @@ class ResearchRunner:
                             dataset_id=f"210_{dataset_name}",
                             output_dir=module_output_dir,
                         )
+                    elif module_id == "211":
+                        self.logger.info(
+                            "    Using dedicated Module 211 "
+                            "walk-forward validation path"
+                        )
+
+                        # Module 211 requires Module 210's executed trades,
+                        # not the raw OHLCV DataFrame.
+                        execution_trade_log_path = (
+                            self.export_manager.raw_dir
+                            / "module210"
+                            / dataset_name
+                            / "executed_trade_log.parquet"
+                        )
+
+                        if not execution_trade_log_path.exists():
+                            raise FileNotFoundError(
+                                "Module 211 requires Module 210 output: "
+                                f"{execution_trade_log_path}. "
+                                "Run Module 210 first."
+                            )
+
+                        # Module 211 currently segments trade records,
+                        # rather than raw market bars.
+                        module.config.train_window_bars = 1000
+                        module.config.test_window_bars = 250
+                        module.config.step_size = 250
+                        module.config.minimum_trades = 30
+                        module.engine.config = module.config
+
+                        self.logger.info(
+                            "    Module 211 trade-log input: "
+                            f"{execution_trade_log_path}"
+                        )
+
+                        result = module.run_validation(
+                            execution_trade_log_path=execution_trade_log_path,
+                            dataset_id=f"211_{dataset_name}",
+                            output_dir=module_output_dir,
+                        )
                     else:
                         # Preserve normal execution for all other modules.
                         result = self.module_loader.run_module(
