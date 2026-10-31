@@ -254,9 +254,6 @@ class ResearchRunner:
 
                                 dependency_artifacts[dep] = artifacts
 
-                            # ----------------------------------------------------
-                            # 117 tells us WHICH features survived
-                            # ----------------------------------------------------
                             selected_features = []
 
                             artifacts_117 = dependency_artifacts.get("117", {})
@@ -280,9 +277,6 @@ class ResearchRunner:
                                         str(f) for f in kept_features
                                     ]
 
-                            # NOTE: Zero KEEP features is a valid research conclusion.
-                            # Module 118 must still run to record the transformation
-                            # stage conclusion. Do NOT raise here.
                             if not selected_features:
                                 self.logger.warning(
                                     f"    Module 118 received zero KEEP features "
@@ -290,10 +284,6 @@ class ResearchRunner:
                                     f"Proceeding with empty feature set."
                                 )
 
-                            # ----------------------------------------------------
-                            # 109 supplies the ACTUAL feature columns
-                            # (only if we have features to select)
-                            # ----------------------------------------------------
                             if selected_features:
                                 artifacts_109 = dependency_artifacts.get("109", {})
 
@@ -326,7 +316,6 @@ class ResearchRunner:
                                     selected_features
                                 ].copy()
 
-                                # Pass the actual feature values into Module 118
                                 module.set_dependency_features(
                                     selected_feature_df
                                 )
@@ -337,7 +326,6 @@ class ResearchRunner:
                                     f"from Module 117 (values from Module 109)"
                                 )
                             else:
-                                # Empty feature selection — pass empty DataFrame
                                 module.set_dependency_features(pd.DataFrame())
 
                                 self.logger.info(
@@ -345,17 +333,9 @@ class ResearchRunner:
                                     f"0 KEEP features from Module 117"
                                 )
 
-                            # Pass the KEEP list (possibly empty) to the engine
                             module.engine.selected_features = selected_features
 
                         elif module_id == "119":
-                            # Module 119 analyzes the quality of the canonical engineered
-                            # features produced upstream by Modules 100, 102, 035 and 037.
-                            #
-                            # Do NOT consume Module 103's "features" artifact here.
-                            # Module 103 exports timestamp + state, whereas Module 119
-                            # needs the actual engineered feature values.
-
                             dependency_artifacts = {}
 
                             for dep in dependencies:
@@ -372,9 +352,6 @@ class ResearchRunner:
 
                                 dependency_artifacts[dep] = artifacts
 
-                            # ----------------------------------------------------
-                            # Required canonical feature sources
-                            # ----------------------------------------------------
                             required_features = {
                                 "100": "trend_score",
                                 "102": "compression_score",
@@ -420,15 +397,11 @@ class ResearchRunner:
                                     feature_df[[feature_name]].reset_index(drop=True)
                                 )
 
-                            # ----------------------------------------------------
-                            # Construct the actual Module 119 feature matrix
-                            # ----------------------------------------------------
                             feature_df = pd.concat(
                                 feature_parts,
                                 axis=1
                             )
 
-                            # Verify row alignment with the current market dataset.
                             if len(feature_df) != len(market_df):
                                 raise RuntimeError(
                                     f"Module 119 feature row count mismatch for "
@@ -437,7 +410,6 @@ class ResearchRunner:
                                     f"market={len(market_df)}"
                                 )
 
-                            # Final structural verification.
                             expected_columns = [
                                 "trend_score",
                                 "compression_score",
@@ -470,19 +442,6 @@ class ResearchRunner:
                             module.set_dependency_features(feature_df)
 
                         elif module_id == "120":
-                            # Module 120 analyzes temporal stability of the
-                            # canonical engineered features.
-                            #
-                            # It must receive the actual feature values from:
-                            #   100 -> trend_score
-                            #   102 -> compression_score
-                            #   035 -> hurst_exponent
-                            #   037 -> normalized_entropy
-                            #
-                            # Do NOT consume Module 103's "features" artifact.
-                            # Module 103 exports state information, not the
-                            # canonical feature-value matrix required here.
-
                             dependency_artifacts = {}
 
                             for dep in dependencies:
@@ -499,9 +458,6 @@ class ResearchRunner:
 
                                 dependency_artifacts[dep] = artifacts
 
-                            # ----------------------------------------------------
-                            # Required canonical feature sources
-                            # ----------------------------------------------------
                             required_features = {
                                 "100": "trend_score",
                                 "102": "compression_score",
@@ -547,17 +503,11 @@ class ResearchRunner:
                                     feature_df[[feature_name]].reset_index(drop=True)
                                 )
 
-                            # ----------------------------------------------------
-                            # Construct Module 120 feature matrix
-                            # ----------------------------------------------------
                             feature_df = pd.concat(
                                 feature_parts,
                                 axis=1
                             )
 
-                            # ----------------------------------------------------
-                            # Verify row alignment
-                            # ----------------------------------------------------
                             if len(feature_df) != len(market_df):
                                 raise RuntimeError(
                                     f"Module 120 feature row count mismatch for "
@@ -566,9 +516,6 @@ class ResearchRunner:
                                     f"market={len(market_df)}"
                                 )
 
-                            # ----------------------------------------------------
-                            # Final structural verification
-                            # ----------------------------------------------------
                             expected_columns = [
                                 "trend_score",
                                 "compression_score",
@@ -599,17 +546,9 @@ class ResearchRunner:
                                 f"{list(feature_df.columns)}"
                             )
 
-                            # Pass actual feature values into Module 120
                             module.set_dependency_features(feature_df)
 
                         elif module_id == "121":
-                            # Module 121 analyzes redundancy between the canonical
-                            # engineered features produced upstream by:
-                            #   100 -> trend_score
-                            #   102 -> compression_score
-                            #   035 -> hurst_exponent
-                            #   037 -> normalized_entropy
-
                             dependency_artifacts = {}
 
                             for dep in dependencies:
@@ -686,9 +625,6 @@ class ResearchRunner:
                             module.set_dependency_features(feature_df)
 
                         elif module_id == "124":
-                            # Module 124 analyzes redundancy among the four canonical
-                            # engineered features produced by Modules 100, 102, 035 and 037.
-
                             dependency_artifacts = {}
 
                             for dep in dependencies:
@@ -771,9 +707,6 @@ class ResearchRunner:
                             )
 
                         elif module_id == "126":
-                            # Module 126 is a feature repository.
-                            # It requires each feature DataFrame to contain a timestamp column.
-
                             feature_dict = {}
 
                             for dep in dependencies:
@@ -798,8 +731,6 @@ class ResearchRunner:
 
                                 feature_df = feature_df.copy().reset_index(drop=True)
 
-                                # Module 126's repository engine requires timestamp
-                                # in every feature DataFrame.
                                 if "timestamp" not in feature_df.columns:
                                     if len(feature_df) != len(market_df):
                                         raise RuntimeError(
@@ -820,7 +751,6 @@ class ResearchRunner:
                                         .reset_index(drop=True)
                                     )
 
-                                # Final row-count validation
                                 if len(feature_df) != len(market_df):
                                     raise RuntimeError(
                                         f"Module 126 dependency {dep} row count "
@@ -844,9 +774,6 @@ class ResearchRunner:
                                 f"    Module 126 feature sources: {list(feature_dict.keys())}"
                             )
 
-                            # IMPORTANT:
-                            # Module 126 must be executed through its dedicated
-                            # run_repository() interface.
                             result = module.run_repository(
                                 feature_dict=feature_dict,
                                 dataset_id=f"{module_id}_{dataset_name}",
@@ -855,7 +782,6 @@ class ResearchRunner:
 
                             duration = time.time() - start_time
 
-                            # Store standardized artifacts
                             if hasattr(result, "artifacts") and result.artifacts:
                                 self.artifact_store.put(
                                     dataset_name,
@@ -868,7 +794,6 @@ class ResearchRunner:
                                     f"for {dataset_name}"
                                 )
 
-                            # Export outputs
                             self.export_manager.export_module_outputs(
                                 module_id,
                                 dataset_name,
@@ -876,14 +801,12 @@ class ResearchRunner:
                                 module_output_dir
                             )
 
-                            # Extract statistics
                             stats_df = self.export_manager.consolidate_statistics(
                                 module_id,
                                 dataset_name,
                                 result
                             )
 
-                            # Add metadata
                             stats_df["timestamp"] = datetime.now().isoformat()
                             stats_df["duration"] = duration
                             stats_df["version"] = module_info.get(
@@ -930,20 +853,9 @@ class ResearchRunner:
                                 f"    Module 126 completed for {dataset_name}"
                             )
 
-                            # Skip the generic run_module() path below.
                             continue
 
                         elif module_id == "200":
-                            # Module 200 consumes the completed master feature repository
-                            # produced by Module 126.
-                            #
-                            # Module 200 must NOT receive a normal market DataFrame or
-                            # dependency feature DataFrame. Its execution contract is:
-                            #
-                            #     master_path + metadata_path
-                            #
-                            # through run_integration().
-
                             artifacts_126 = self.artifact_store.get(
                                 dataset_name,
                                 "126"
@@ -983,11 +895,6 @@ class ResearchRunner:
                                     f"Module 126 feature_metadata is empty "
                                     f"for dataset {dataset_name}"
                                 )
-
-                            # ------------------------------------------------------------
-                            # Materialize Module 126 artifacts for Module 200.
-                            # Module 200's public interface requires file paths.
-                            # ------------------------------------------------------------
 
                             module200_input_dir = (
                                 module_output_dir / "input"
@@ -1034,12 +941,6 @@ class ResearchRunner:
                                 f"{metadata_path}"
                             )
 
-                            # ------------------------------------------------------------
-                            # IMPORTANT:
-                            # Module 200 has its own execution interface.
-                            # Do NOT call run_dataframe().
-                            # ------------------------------------------------------------
-
                             result = module.run_integration(
                                 master_path=master_path,
                                 metadata_path=metadata_path,
@@ -1048,10 +949,6 @@ class ResearchRunner:
                             )
 
                             duration = time.time() - start_time
-
-                            # ------------------------------------------------------------
-                            # Store artifacts
-                            # ------------------------------------------------------------
 
                             if hasattr(result, "artifacts") and result.artifacts:
                                 self.artifact_store.put(
@@ -1065,20 +962,12 @@ class ResearchRunner:
                                     f"for {dataset_name}"
                                 )
 
-                            # ------------------------------------------------------------
-                            # Export outputs
-                            # ------------------------------------------------------------
-
                             self.export_manager.export_module_outputs(
                                 module_id,
                                 dataset_name,
                                 result,
                                 module_output_dir
                             )
-
-                            # ------------------------------------------------------------
-                            # Statistics
-                            # ------------------------------------------------------------
 
                             stats_df = self.export_manager.consolidate_statistics(
                                 module_id,
@@ -1162,22 +1051,9 @@ class ResearchRunner:
                                 f"    Module 200 completed for {dataset_name}"
                             )
 
-                            # Do not fall through to generic run_dataframe().
                             continue
 
                         elif module_id == "201":
-                            # Module 201 consumes the integrated feature matrix
-                            # produced by Module 200.
-                            #
-                            # Module 201 must NOT receive the normal market DataFrame
-                            # or dependency-injected feature DataFrame.
-                            #
-                            # Its execution contract is:
-                            #
-                            #     integrated_matrix_path
-                            #
-                            # through run_independence().
-
                             module200_output_dir = (
                                 self.export_manager.raw_dir
                                 / "module200"
@@ -1188,10 +1064,6 @@ class ResearchRunner:
                                 module200_output_dir
                                 / "integrated_feature_matrix.parquet"
                             )
-
-                            # ----------------------------------------------------
-                            # Validate Module 200 output
-                            # ----------------------------------------------------
 
                             if not matrix_path.exists():
                                 raise RuntimeError(
@@ -1240,12 +1112,6 @@ class ResearchRunner:
                                 f"    Module 201 matrix path: {matrix_path}"
                             )
 
-                            # ----------------------------------------------------
-                            # IMPORTANT:
-                            # Module 201 has its own execution interface.
-                            # Do NOT call run_dataframe().
-                            # ----------------------------------------------------
-
                             result = module.run_independence(
                                 matrix_path=matrix_path,
                                 dataset_id=f"{module_id}_{dataset_name}",
@@ -1253,10 +1119,6 @@ class ResearchRunner:
                             )
 
                             duration = time.time() - start_time
-
-                            # ----------------------------------------------------
-                            # Store artifacts
-                            # ----------------------------------------------------
 
                             if hasattr(result, "artifacts") and result.artifacts:
                                 self.artifact_store.put(
@@ -1270,20 +1132,12 @@ class ResearchRunner:
                                     f"artifacts for {dataset_name}"
                                 )
 
-                            # ----------------------------------------------------
-                            # Export outputs
-                            # ----------------------------------------------------
-
                             self.export_manager.export_module_outputs(
                                 module_id,
                                 dataset_name,
                                 result,
                                 module_output_dir
                             )
-
-                            # ----------------------------------------------------
-                            # Statistics
-                            # ----------------------------------------------------
 
                             stats_df = self.export_manager.consolidate_statistics(
                                 module_id,
@@ -1305,10 +1159,6 @@ class ResearchRunner:
                             stats_df["dataset"] = dataset_name
 
                             all_stats.append(stats_df)
-
-                            # ----------------------------------------------------
-                            # Determine success
-                            # ----------------------------------------------------
 
                             success = result_succeeded(result)
 
@@ -1341,10 +1191,6 @@ class ResearchRunner:
                                 len(stats_df)
                             )
 
-                            # ----------------------------------------------------
-                            # Build and export Module 201 report
-                            # ----------------------------------------------------
-
                             report = self.summary_builder.build_module_report(
                                 module_id,
                                 module_info,
@@ -1366,8 +1212,6 @@ class ResearchRunner:
                                 "stats_count": len(stats_df)
                             })
 
-                            # Only successful modules satisfy downstream
-                            # dependencies.
                             if success:
                                 self.completed_modules.add(
                                     (dataset_name, module_id)
@@ -1377,24 +1221,9 @@ class ResearchRunner:
                                 f"    Module 201 completed for {dataset_name}"
                             )
 
-                            # IMPORTANT:
-                            # Prevent Module 201 from falling through to the
-                            # generic run_dataframe() path.
                             continue
 
                         elif module_id == "202":
-                            # Module 202 consumes the independent feature matrix
-                            # produced by Module 201.
-                            #
-                            # Module 202 must NOT receive the normal market
-                            # DataFrame or dependency-injected feature DataFrame.
-                            #
-                            # Its execution contract is:
-                            #
-                            #     independent_feature_matrix_path
-                            #
-                            # through run_stability().
-
                             module201_output_dir = (
                                 self.export_manager.raw_dir
                                 / "module201"
@@ -1405,10 +1234,6 @@ class ResearchRunner:
                                 module201_output_dir
                                 / "independent_feature_matrix.parquet"
                             )
-
-                            # ----------------------------------------------------
-                            # Validate Module 201 output
-                            # ----------------------------------------------------
 
                             if not matrix_path.exists():
                                 raise RuntimeError(
@@ -1457,12 +1282,6 @@ class ResearchRunner:
                                 f"    Module 202 matrix path: {matrix_path}"
                             )
 
-                            # ----------------------------------------------------
-                            # IMPORTANT:
-                            # Module 202 has its own execution interface.
-                            # Do NOT call run_dataframe().
-                            # ----------------------------------------------------
-
                             result = module.run_stability(
                                 matrix_path=matrix_path,
                                 dataset_id=f"{module_id}_{dataset_name}",
@@ -1470,10 +1289,6 @@ class ResearchRunner:
                             )
 
                             duration = time.time() - start_time
-
-                            # ----------------------------------------------------
-                            # Store artifacts
-                            # ----------------------------------------------------
 
                             if hasattr(result, "artifacts") and result.artifacts:
                                 self.artifact_store.put(
@@ -1487,20 +1302,12 @@ class ResearchRunner:
                                     f"artifacts for {dataset_name}"
                                 )
 
-                            # ----------------------------------------------------
-                            # Export outputs
-                            # ----------------------------------------------------
-
                             self.export_manager.export_module_outputs(
                                 module_id,
                                 dataset_name,
                                 result,
                                 module_output_dir
                             )
-
-                            # ----------------------------------------------------
-                            # Statistics
-                            # ----------------------------------------------------
 
                             stats_df = self.export_manager.consolidate_statistics(
                                 module_id,
@@ -1522,10 +1329,6 @@ class ResearchRunner:
                             stats_df["dataset"] = dataset_name
 
                             all_stats.append(stats_df)
-
-                            # ----------------------------------------------------
-                            # Determine success
-                            # ----------------------------------------------------
 
                             success = result_succeeded(result)
 
@@ -1558,10 +1361,6 @@ class ResearchRunner:
                                 len(stats_df)
                             )
 
-                            # ----------------------------------------------------
-                            # Build and export Module 202 report
-                            # ----------------------------------------------------
-
                             report = self.summary_builder.build_module_report(
                                 module_id,
                                 module_info,
@@ -1583,8 +1382,6 @@ class ResearchRunner:
                                 "stats_count": len(stats_df)
                             })
 
-                            # Only successful modules satisfy downstream
-                            # dependencies.
                             if success:
                                 self.completed_modules.add(
                                     (dataset_name, module_id)
@@ -1594,20 +1391,9 @@ class ResearchRunner:
                                 f"    Module 202 completed for {dataset_name}"
                             )
 
-                            # IMPORTANT:
-                            # Prevent Module 202 from falling through to the
-                            # generic run_dataframe() path.
                             continue
 
                         elif module_id == "203":
-                            # ============================================================
-                            # MODULE 203 - FEATURE PREDICTIVE POWER
-                            # ============================================================
-                            # Module 203 is file-driven.
-                            # It consumes Module 202's stable feature matrix.
-                            # Do NOT route it through generic run_dataframe().
-                            # ============================================================
-
                             module202_output_dir = (
                                 self.export_manager.raw_dir
                                 / "module202"
@@ -1624,10 +1410,6 @@ class ResearchRunner:
                                 f"from Module 202: {matrix_path}"
                             )
 
-                            # ----------------------------------------------------
-                            # Validate Module 202 output
-                            # ----------------------------------------------------
-
                             if not matrix_path.exists():
                                 raise FileNotFoundError(
                                     f"Module 203 stable matrix not found: "
@@ -1639,10 +1421,6 @@ class ResearchRunner:
                                     f"Module 203 stable matrix is empty: "
                                     f"{matrix_path}"
                                 )
-
-                            # ----------------------------------------------------
-                            # Load Module 202 stable feature matrix
-                            # ----------------------------------------------------
 
                             stable_matrix_df = pd.read_parquet(matrix_path)
 
@@ -1658,17 +1436,6 @@ class ResearchRunner:
                                     f"column: {matrix_path}"
                                 )
 
-                            # ----------------------------------------------------
-                            # Module 203 requires:
-                            #   timestamp
-                            #   close
-                            #   stable features from Module 202
-                            #
-                            # IMPORTANT:
-                            # Do NOT modify Module 202's stable matrix.
-                            # We construct a temporary Module 203 input matrix.
-                            # ----------------------------------------------------
-
                             if "close" not in market_df.columns:
                                 raise ValueError(
                                     f"Module 203 requires 'close' in the raw market "
@@ -1682,11 +1449,9 @@ class ResearchRunner:
                                     f"market_data={len(market_df)}"
                                 )
 
-                            # Reset indexes before positional alignment
                             stable_matrix_df = stable_matrix_df.reset_index(drop=True)
                             market_close = market_df["close"].reset_index(drop=True)
 
-                            # Verify timestamp alignment
                             market_timestamp = pd.to_datetime(
                                 market_df["timestamp"].reset_index(drop=True)
                             )
@@ -1703,12 +1468,10 @@ class ResearchRunner:
                                     f"are not aligned."
                                 )
 
-                            # Add close ONLY to the Module 203 analysis input.
                             predictive_input_df = stable_matrix_df.copy()
 
                             predictive_input_df["close"] = market_close
 
-                            # Put timestamp first, close second, features after that
                             feature_columns = [
                                 c for c in predictive_input_df.columns
                                 if c not in {"timestamp", "close"}
@@ -1723,10 +1486,6 @@ class ResearchRunner:
                             predictive_input_df = predictive_input_df[
                                 ["timestamp", "close"] + feature_columns
                             ]
-
-                            # ----------------------------------------------------
-                            # Save temporary Module 203 input
-                            # ----------------------------------------------------
 
                             module203_input_dir = (
                                 module_output_dir / "input"
@@ -1758,12 +1517,6 @@ class ResearchRunner:
                                 f"{len(feature_columns)} features + close"
                             )
 
-                            # ------------------------------------------------------------
-                            # IMPORTANT:
-                            # Module 203 has its own execution interface.
-                            # Do NOT call run_dataframe().
-                            # ------------------------------------------------------------
-
                             result = module.run_predictive(
                                 matrix_path=predictive_input_path,
                                 dataset_id=f"{module_id}_{dataset_name}",
@@ -1771,14 +1524,6 @@ class ResearchRunner:
                             )
 
                             duration = time.time() - start_time
-
-                            # ----------------------------------------------------
-                            # Fix 1 — Validate Module 203 output
-                            # ----------------------------------------------------
-                            # Confirm that Module 203 produced a non-empty
-                            # predictive feature matrix with at least one
-                            # feature column. If not, abort before downstream
-                            # modules consume a degenerate file.
 
                             predictive_matrix_path = (
                                 module_output_dir
@@ -1814,10 +1559,6 @@ class ResearchRunner:
                                 f"{predictive_matrix.shape[1]} features"
                             )
 
-                            # ----------------------------------------------------
-                            # Store artifacts
-                            # ----------------------------------------------------
-
                             if hasattr(result, "artifacts") and result.artifacts:
                                 self.artifact_store.put(
                                     dataset_name,
@@ -1830,20 +1571,12 @@ class ResearchRunner:
                                     f"artifacts for {dataset_name}"
                                 )
 
-                            # ----------------------------------------------------
-                            # Export outputs
-                            # ----------------------------------------------------
-
                             self.export_manager.export_module_outputs(
                                 module_id,
                                 dataset_name,
                                 result,
                                 module_output_dir
                             )
-
-                            # ----------------------------------------------------
-                            # Statistics
-                            # ----------------------------------------------------
 
                             stats_df = self.export_manager.consolidate_statistics(
                                 module_id,
@@ -1865,10 +1598,6 @@ class ResearchRunner:
                             stats_df["dataset"] = dataset_name
 
                             all_stats.append(stats_df)
-
-                            # ----------------------------------------------------
-                            # Determine success
-                            # ----------------------------------------------------
 
                             success = result_succeeded(result)
 
@@ -1901,10 +1630,6 @@ class ResearchRunner:
                                 len(stats_df)
                             )
 
-                            # ----------------------------------------------------
-                            # Build and export Module 203 report
-                            # ----------------------------------------------------
-
                             report = self.summary_builder.build_module_report(
                                 module_id,
                                 module_info,
@@ -1926,8 +1651,6 @@ class ResearchRunner:
                                 "stats_count": len(stats_df)
                             })
 
-                            # Only successful modules satisfy downstream
-                            # dependencies.
                             if success:
                                 self.completed_modules.add(
                                     (dataset_name, module_id)
@@ -1937,20 +1660,9 @@ class ResearchRunner:
                                 f"    Module 203 completed for {dataset_name}"
                             )
 
-                            # IMPORTANT:
-                            # Prevent Module 203 from falling through to the
-                            # generic run_dataframe() path.
                             continue
 
                         elif module_id == "204":
-                            # ----------------------------------------------------
-                            # Module 204 is a file-driven feature redundancy/synergy
-                            # module.
-                            #
-                            # It consumes Module 203's predictive INPUT matrix.
-                            # Do NOT use the generic run_dataframe() path.
-                            # ----------------------------------------------------
-
                             module203_output_dir = (
                                 self.export_manager.raw_dir
                                 / "module203"
@@ -1962,10 +1674,6 @@ class ResearchRunner:
                                 / "input"
                                 / "predictive_input.parquet"
                             )
-
-                            # ----------------------------------------------------
-                            # Fix 2 — Validate Module 204 input
-                            # ----------------------------------------------------
 
                             if not matrix_path.exists():
                                 raise FileNotFoundError(
@@ -1989,15 +1697,6 @@ class ResearchRunner:
                                     f"{matrix_path}"
                                 )
 
-                            # ----------------------------------------------------
-                            # Module 203 predictive INPUT matrix contains the
-                            # candidate features before predictive KEEP/REMOVE
-                            # filtering.
-                            #
-                            # Module 204 must analyze these candidate features
-                            # for redundancy/synergy.
-                            # ----------------------------------------------------
-
                             ignored_columns = {
                                 "timestamp",
                                 "date",
@@ -2014,15 +1713,6 @@ class ResearchRunner:
                                 c for c in predictive_matrix_df.columns
                                 if c not in ignored_columns
                             ]
-
-                            # ----------------------------------------------------
-                            # Fix — Require at least 2 candidate features
-                            # ----------------------------------------------------
-                            # Module 204 performs pairwise redundancy / synergy
-                            # analysis. With fewer than 2 candidate features it
-                            # cannot construct a single pair, so it must abort
-                            # with a message that names the requirement and
-                            # lists the actual columns.
 
                             if len(feature_columns) < 2:
                                 raise ValueError(
@@ -2045,10 +1735,6 @@ class ResearchRunner:
                                 f"    Module 204 feature columns: "
                                 f"{feature_columns}"
                             )
-
-                            # ----------------------------------------------------
-                            # Validate timestamp alignment against market dataset
-                            # ----------------------------------------------------
 
                             if len(predictive_matrix_df) != len(market_df):
                                 raise ValueError(
@@ -2074,11 +1760,6 @@ class ResearchRunner:
                                     f"and raw market data are not aligned."
                                 )
 
-                            # ----------------------------------------------------
-                            # IMPORTANT:
-                            # Use Module 204's dedicated production interface.
-                            # ----------------------------------------------------
-
                             result = module.run_redundancy_synergy(
                                 matrix_path=matrix_path,
                                 dataset_id=f"{module_id}_{dataset_name}",
@@ -2086,10 +1767,6 @@ class ResearchRunner:
                             )
 
                             duration = time.time() - start_time
-
-                            # ----------------------------------------------------
-                            # Standardized artifact bookkeeping
-                            # ----------------------------------------------------
 
                             if hasattr(result, "artifacts") and result.artifacts:
                                 self.artifact_store.put(
@@ -2163,41 +1840,9 @@ class ResearchRunner:
                                 f"    Module 204 completed for {dataset_name}"
                             )
 
-                            # Do not fall through to generic run_dataframe().
                             continue
 
                         elif module_id == "205":
-                            # ============================================================
-                            # MODULE 205 - FEATURE SELECTION
-                            # ============================================================
-                            # Module 205 is a file-driven feature-selection module.
-                            #
-                            # It consumes the outputs of four upstream modules:
-                            #
-                            #   Module 203 : predictive_feature_matrix.parquet
-                            #                (per-timeframe predictive evidence)
-                            #
-                            #   Module 202 : feature_stability.csv
-                            #                (stability scores per feature)
-                            #
-                            #   Module 203 : predictive_feature_scores.csv
-                            #                (predictive scores per feature)
-                            #
-                            #   Module 204 : feature_redundancy.csv
-                            #                (redundancy scores per feature)
-                            #
-                            #   Module 204 : removed_redundant_features.csv
-                            #                (features removed as redundant)
-                            #
-                            # IMPORTANT:
-                            # Do NOT route Module 205 through generic
-                            # run_dataframe().
-                            # ============================================================
-
-                            # ----------------------------------------------------
-                            # Locate upstream artifacts
-                            # ----------------------------------------------------
-
                             module202_dir = (
                                 self.export_manager.raw_dir
                                 / "module202"
@@ -2241,12 +1886,6 @@ class ResearchRunner:
                                 / "removed_redundant_features.csv"
                             )
 
-                            # ----------------------------------------------------
-                            # Fix 3 — Validate Module 205 input loading
-                            # ----------------------------------------------------
-                            # Fail immediately when the predictive matrix is
-                            # missing, empty, or contains zero feature columns.
-
                             if not predictive_matrix_path.exists():
                                 raise FileNotFoundError(
                                     f"Missing predictive matrix: "
@@ -2266,10 +1905,6 @@ class ResearchRunner:
                                     "Module 205 received zero predictive "
                                     "features."
                                 )
-
-                            # ----------------------------------------------------
-                            # Validate required upstream files
-                            # ----------------------------------------------------
 
                             required_files = {
                                 "Module 203 predictive_feature_matrix":
@@ -2327,12 +1962,6 @@ class ResearchRunner:
                                 f"{removed_file}"
                             )
 
-                            # ----------------------------------------------------
-                            # IMPORTANT:
-                            # Module 205 has its own execution interface.
-                            # Do NOT call run_dataframe().
-                            # ----------------------------------------------------
-
                             result = module.run_selection(
                                 predictive_matrix=predictive_matrix_path,
                                 stability_file=stability_file,
@@ -2344,15 +1973,6 @@ class ResearchRunner:
                             )
 
                             duration = time.time() - start_time
-
-                            # ----------------------------------------------------
-                            # Validation gate — inspect result.validation
-                            # ----------------------------------------------------
-                            # Module 205 must not be treated as successful
-                            # unless it explicitly reports that software
-                            # validation passed. This protects against a
-                            # module that runs to completion but produces a
-                            # degenerate output (e.g., zero selected features).
 
                             validation = getattr(result, "validation", None)
 
@@ -2371,10 +1991,6 @@ class ResearchRunner:
                                 )
                             else:
                                 success = result_succeeded(result)
-
-                            # ----------------------------------------------------
-                            # Standardized artifact bookkeeping
-                            # ----------------------------------------------------
 
                             if hasattr(result, "artifacts") and result.artifacts:
                                 self.artifact_store.put(
@@ -2416,26 +2032,8 @@ class ResearchRunner:
 
                             all_stats.append(stats_df)
 
-                            # ----------------------------------------------------
-                            # Extract selected_count from Module 205 result.
-                            #
-                            # The freeze gate downstream needs the true
-                            # number of selected features, not the number
-                            # of statistics rows.
-                            #
-                            # IMPORTANT:
-                            # Module 205 exposes its summary statistics
-                            # through result.statistics. The top-level
-                            # result wrapper does NOT carry a
-                            # summary_statistics attribute. We therefore
-                            # read the count from result.statistics first,
-                            # and fall back to result.summary_statistics
-                            # only for compatibility with other wrappers.
-                            # ----------------------------------------------------
-
                             module205_selected_count = 0
 
-                            # Module 205 exposes its statistics through result.statistics.
                             result_statistics = getattr(result, "statistics", None)
 
                             if isinstance(result_statistics, dict):
@@ -2443,8 +2041,6 @@ class ResearchRunner:
                                     result_statistics.get("selected_count", 0) or 0
                                 )
 
-                            # Compatibility fallback: some result wrappers expose the
-                            # engine summary directly.
                             if module205_selected_count == 0:
                                 result_summary = getattr(result, "summary_statistics", None)
 
@@ -2453,7 +2049,6 @@ class ResearchRunner:
                                         result_summary.get("selected_count", 0) or 0
                                     )
 
-                            # Diagnostic log
                             self.logger.info(
                                 f"    Module 205 selected_count for {dataset_name}: "
                                 f"{module205_selected_count}"
@@ -2489,10 +2084,6 @@ class ResearchRunner:
                                 len(stats_df)
                             )
 
-                            # ----------------------------------------------------
-                            # Build and export Module 205 report
-                            # ----------------------------------------------------
-
                             report = self.summary_builder.build_module_report(
                                 module_id,
                                 module_info,
@@ -2514,8 +2105,6 @@ class ResearchRunner:
                                 "stats_count": len(stats_df)
                             })
 
-                            # Only successful modules satisfy downstream
-                            # dependencies.
                             if success:
                                 self.completed_modules.add(
                                     (dataset_name, module_id)
@@ -2525,7 +2114,6 @@ class ResearchRunner:
                                 f"    Module 205 completed for {dataset_name}"
                             )
 
-                            # Do not fall through to generic run_dataframe().
                             continue
 
                         else:
@@ -2548,13 +2136,6 @@ class ResearchRunner:
                     
                     # ============================================================
                     # MODULE 206 - SIGNAL CONSTRUCTION
-                    # ============================================================
-                    # Module 206 is file-driven and MUST NOT use the generic
-                    # run_dataframe() execution path.
-                    #
-                    # This dispatch sits OUTSIDE the `if dependencies:` block
-                    # and ABOVE the generic execution path. It intercepts
-                    # Module 206 before control can reach run_module().
                     # ============================================================
                     if module_id == "206":
                         self.logger.info(
@@ -2627,8 +2208,6 @@ class ResearchRunner:
                             output_dir=module_output_dir,
                         )
 
-                        # Ensure Module 206 component artifacts carry the actual signal timestamps
-                        # before ResearchRunner stores and exports them.
                         artifacts = getattr(result, "artifacts", None)
 
                         if not isinstance(artifacts, dict):
@@ -2664,10 +2243,6 @@ class ResearchRunner:
 
                         duration = time.time() - start_time
 
-                        # ------------------------------------------------------------
-                        # Validation gate — fail the module when
-                        # software_validation_passed is False.
-                        # ------------------------------------------------------------
                         validation = getattr(result, "validation", None)
 
                         if validation is None:
@@ -2687,9 +2262,6 @@ class ResearchRunner:
                         else:
                             success = result_succeeded(result)
 
-                        # ------------------------------------------------------------
-                        # Store artifacts
-                        # ------------------------------------------------------------
                         if hasattr(result, "artifacts") and result.artifacts:
                             self.artifact_store.put(
                                 dataset_name,
@@ -2702,9 +2274,6 @@ class ResearchRunner:
                                 f"for {dataset_name}"
                             )
 
-                        # ------------------------------------------------------------
-                        # Export outputs
-                        # ------------------------------------------------------------
                         self.export_manager.export_module_outputs(
                             module_id,
                             dataset_name,
@@ -2712,9 +2281,6 @@ class ResearchRunner:
                             module_output_dir
                         )
 
-                        # ------------------------------------------------------------
-                        # Statistics
-                        # ------------------------------------------------------------
                         stats_df = self.export_manager.consolidate_statistics(
                             module_id,
                             dataset_name,
@@ -2736,9 +2302,6 @@ class ResearchRunner:
 
                         all_stats.append(stats_df)
 
-                        # ------------------------------------------------------------
-                        # Index entry
-                        # ------------------------------------------------------------
                         index_data.append({
                             "module_id": module_id,
                             "module_name": module_name,
@@ -2768,9 +2331,6 @@ class ResearchRunner:
                             len(stats_df)
                         )
 
-                        # ------------------------------------------------------------
-                        # Build and export Module 206 report
-                        # ------------------------------------------------------------
                         report = self.summary_builder.build_module_report(
                             module_id,
                             module_info,
@@ -2792,8 +2352,6 @@ class ResearchRunner:
                             "stats_count": len(stats_df)
                         })
 
-                        # Only successful modules satisfy downstream
-                        # dependencies.
                         if success:
                             self.completed_modules.add(
                                 (dataset_name, module_id)
@@ -2803,20 +2361,10 @@ class ResearchRunner:
                             f"    Module 206 completed for {dataset_name}"
                         )
 
-                        # CRITICAL:
-                        # Prevent Module 206 from falling through to the
-                        # generic run_dataframe() execution path.
                         continue
                     
                     # ============================================================
                     # MODULE 207 - SIGNAL CONFIDENCE
-                    # ============================================================
-                    # File-driven module: do not send it through run_dataframe().
-                    # This dispatch must remain outside `if dependencies:`.
-                    #
-                    # Module 207 consumes the outputs of Module 206:
-                    #   - signal_matrix.parquet
-                    #   - signal_components.csv
                     # ============================================================
                     if module_id == "207":
                         self.logger.info(
@@ -2873,10 +2421,6 @@ class ResearchRunner:
 
                         duration = time.time() - start_time
 
-                        # ------------------------------------------------------------
-                        # Validation gate — fail the module when
-                        # software_validation_passed is False.
-                        # ------------------------------------------------------------
                         validation = getattr(result, "validation", None)
 
                         if validation is None:
@@ -2896,9 +2440,6 @@ class ResearchRunner:
                         else:
                             success = result_succeeded(result)
 
-                        # ------------------------------------------------------------
-                        # Store artifacts
-                        # ------------------------------------------------------------
                         if hasattr(result, "artifacts") and result.artifacts:
                             self.artifact_store.put(
                                 dataset_name,
@@ -2911,9 +2452,6 @@ class ResearchRunner:
                                 f"for {dataset_name}"
                             )
 
-                        # ------------------------------------------------------------
-                        # Export outputs
-                        # ------------------------------------------------------------
                         self.export_manager.export_module_outputs(
                             module_id,
                             dataset_name,
@@ -2921,9 +2459,6 @@ class ResearchRunner:
                             module_output_dir
                         )
 
-                        # ------------------------------------------------------------
-                        # Statistics
-                        # ------------------------------------------------------------
                         stats_df = self.export_manager.consolidate_statistics(
                             module_id,
                             dataset_name,
@@ -2945,9 +2480,6 @@ class ResearchRunner:
 
                         all_stats.append(stats_df)
 
-                        # ------------------------------------------------------------
-                        # Index entry
-                        # ------------------------------------------------------------
                         index_data.append({
                             "module_id": module_id,
                             "module_name": module_name,
@@ -2977,9 +2509,6 @@ class ResearchRunner:
                             len(stats_df)
                         )
 
-                        # ------------------------------------------------------------
-                        # Build and export Module 207 report
-                        # ------------------------------------------------------------
                         report = self.summary_builder.build_module_report(
                             module_id,
                             module_info,
@@ -3001,8 +2530,6 @@ class ResearchRunner:
                             "stats_count": len(stats_df)
                         })
 
-                        # Only successful modules satisfy downstream
-                        # dependencies.
                         if success:
                             self.completed_modules.add(
                                 (dataset_name, module_id)
@@ -3012,21 +2539,10 @@ class ResearchRunner:
                             f"    Module 207 completed for {dataset_name}"
                         )
 
-                        # CRITICAL:
-                        # Prevent Module 207 from falling through to the
-                        # generic run_dataframe() execution path.
                         continue
                     
                     # ============================================================
                     # MODULE 208 - PORTFOLIO CONSTRUCTION
-                    # ============================================================
-                    # File-driven module: do not send it through run_dataframe().
-                    # This dispatch must remain outside `if dependencies:`.
-                    #
-                    # Module 208 consumes the outputs of Module 206 and
-                    # Module 207:
-                    #   - Module 206 signal_matrix.parquet
-                    #   - Module 207 confidence_matrix.parquet
                     # ============================================================
                     if module_id == "208":
                         self.logger.info(
@@ -3089,10 +2605,6 @@ class ResearchRunner:
 
                         duration = time.time() - start_time
 
-                        # ------------------------------------------------------------
-                        # Validation gate — fail the module when
-                        # software_validation_passed is False.
-                        # ------------------------------------------------------------
                         validation = getattr(result, "validation", None)
 
                         if validation is None:
@@ -3112,9 +2624,6 @@ class ResearchRunner:
                         else:
                             success = result_succeeded(result)
 
-                        # ------------------------------------------------------------
-                        # Store artifacts
-                        # ------------------------------------------------------------
                         if hasattr(result, "artifacts") and result.artifacts:
                             self.artifact_store.put(
                                 dataset_name,
@@ -3127,9 +2636,6 @@ class ResearchRunner:
                                 f"for {dataset_name}"
                             )
 
-                        # ------------------------------------------------------------
-                        # Export outputs
-                        # ------------------------------------------------------------
                         self.export_manager.export_module_outputs(
                             module_id,
                             dataset_name,
@@ -3137,9 +2643,6 @@ class ResearchRunner:
                             module_output_dir
                         )
 
-                        # ------------------------------------------------------------
-                        # Statistics
-                        # ------------------------------------------------------------
                         stats_df = self.export_manager.consolidate_statistics(
                             module_id,
                             dataset_name,
@@ -3161,9 +2664,6 @@ class ResearchRunner:
 
                         all_stats.append(stats_df)
 
-                        # ------------------------------------------------------------
-                        # Index entry
-                        # ------------------------------------------------------------
                         index_data.append({
                             "module_id": module_id,
                             "module_name": module_name,
@@ -3193,9 +2693,6 @@ class ResearchRunner:
                             len(stats_df)
                         )
 
-                        # ------------------------------------------------------------
-                        # Build and export Module 208 report
-                        # ------------------------------------------------------------
                         report = self.summary_builder.build_module_report(
                             module_id,
                             module_info,
@@ -3217,8 +2714,6 @@ class ResearchRunner:
                             "stats_count": len(stats_df)
                         })
 
-                        # Only successful modules satisfy downstream
-                        # dependencies.
                         if success:
                             self.completed_modules.add(
                                 (dataset_name, module_id)
@@ -3228,23 +2723,10 @@ class ResearchRunner:
                             f"    Module 208 completed for {dataset_name}"
                         )
 
-                        # CRITICAL:
-                        # Prevent Module 208 from falling through to the
-                        # generic run_dataframe() execution path.
                         continue
                     
                     # ============================================================
                     # MODULE 209 - RISK ENGINE
-                    # ============================================================
-                    # File-driven module: consume Module 208 portfolio output.
-                    # This dispatch must remain outside `if dependencies:`.
-                    #
-                    # Module 209 consumes the output of Module 208:
-                    #   - Module 208 portfolio_matrix.parquet
-                    #
-                    # The portfolio matrix does not contain OHLCV prices.
-                    # We join the matching timeframe's price columns on
-                    # timestamp before calling the risk engine.
                     # ============================================================
                     if module_id == "209":
                         self.logger.info(
@@ -3272,18 +2754,6 @@ class ResearchRunner:
                             f"{portfolio_matrix_path}"
                         )
 
-                        # ------------------------------------------------------------
-                        # MODULE 209 FIX: Join OHLCV price columns by timestamp
-                        #
-                        # Do not modify Module 208's original portfolio matrix.
-                        # We construct an enriched portfolio matrix that
-                        # includes the price columns at each timestamp so
-                        # the risk engine can compute returns and downside risk.
-                        #
-                        # The merge below preserves the full price context
-                        # (open, high, low, close, volume) whenever the
-                        # source OHLCV dataset provides those columns.
-                        # ------------------------------------------------------------
                         parquet_price_path = (
                             self.data_path / f"BTCUSD_{dataset_name}.parquet"
                         )
@@ -3305,7 +2775,6 @@ class ResearchRunner:
                                 f"{parquet_price_path} and {csv_price_path}"
                             )
 
-                        # Read Module 208 portfolio data and matching timeframe prices.
                         portfolio_df = pd.read_parquet(portfolio_matrix_path)
 
                         if price_path.suffix.lower() == ".parquet":
@@ -3313,7 +2782,6 @@ class ResearchRunner:
                         else:
                             price_df = pd.read_csv(price_path)
 
-                        # Validate required columns.
                         required_portfolio = {
                             "timestamp",
                             "desired_position",
@@ -3333,14 +2801,6 @@ class ResearchRunner:
                                 f"Available: {sorted(portfolio_df.columns)}"
                             )
 
-                        # ------------------------------------------------------------
-                        # PRESERVE OHLC PRICES
-                        #
-                        # Module 209 requires open and close. It carries
-                        # high, low and volume through to the enriched
-                        # portfolio matrix whenever the source OHLCV file
-                        # provides them.
-                        # ------------------------------------------------------------
                         required_price_columns = {"timestamp", "open", "close"}
 
                         missing_price_columns = (
@@ -3361,12 +2821,6 @@ class ResearchRunner:
 
                         price_df = price_df[price_columns].copy()
 
-                        # ------------------------------------------------------------
-                        # Normalize timestamps on both sides before the join.
-                        # Portfolio timestamps come from Module 208 and are
-                        # already normalized; the price timestamps come from
-                        # the raw OHLCV source and may be strings.
-                        # ------------------------------------------------------------
                         portfolio_df["timestamp"] = pd.to_datetime(
                             portfolio_df["timestamp"],
                             utc=True,
@@ -3385,14 +2839,6 @@ class ResearchRunner:
 
                         price_df = price_df.dropna(subset=["timestamp"])
 
-                        # ------------------------------------------------------------
-                        # Join on timestamp. Keep every portfolio row so the
-                        # risk engine sees the same row count as Module 208.
-                        #
-                        # IMPORTANT:
-                        # We carry every preserved price column through the
-                        # merge, not just close.
-                        # ------------------------------------------------------------
                         portfolio_df = portfolio_df.merge(
                             price_df,
                             on="timestamp",
@@ -3400,10 +2846,6 @@ class ResearchRunner:
                             validate="one_to_one",
                         )
 
-                        # ------------------------------------------------------------
-                        # Fail loudly if the join dropped prices. A missing
-                        # price value would silently corrupt risk metrics.
-                        # ------------------------------------------------------------
                         missing_close_count = int(
                             portfolio_df["close"].isna().sum()
                         )
@@ -3416,14 +2858,6 @@ class ResearchRunner:
                                 f"price after joining on timestamp."
                             )
 
-                        # ------------------------------------------------------------
-                        # VALIDATE ALIGNED PRICE COLUMNS
-                        #
-                        # Both open and close must be numeric, non-null,
-                        # strictly positive and finite for every row.
-                        # A violation here would silently corrupt the
-                        # risk engine's return and drawdown calculations.
-                        # ------------------------------------------------------------
                         aligned_df = portfolio_df
 
                         for price_col in ("open", "close"):
@@ -3446,11 +2880,6 @@ class ResearchRunner:
                                     f"for {dataset_name}"
                                 )
 
-                        # ------------------------------------------------------------
-                        # Materialize the enriched portfolio matrix in the
-                        # module's own input directory so the risk engine
-                        # consumes a concrete file path.
-                        # ------------------------------------------------------------
                         module209_input_dir = (
                             module_output_dir / "input"
                         )
@@ -3485,10 +2914,6 @@ class ResearchRunner:
 
                         duration = time.time() - start_time
 
-                        # ------------------------------------------------------------
-                        # Validation gate — fail the module when
-                        # software_validation_passed is False.
-                        # ------------------------------------------------------------
                         validation = getattr(result, "validation", None)
 
                         if validation is None:
@@ -3508,9 +2933,6 @@ class ResearchRunner:
                         else:
                             success = result_succeeded(result)
 
-                        # ------------------------------------------------------------
-                        # Store artifacts
-                        # ------------------------------------------------------------
                         if hasattr(result, "artifacts") and result.artifacts:
                             self.artifact_store.put(
                                 dataset_name,
@@ -3523,9 +2945,6 @@ class ResearchRunner:
                                 f"for {dataset_name}"
                             )
 
-                        # ------------------------------------------------------------
-                        # Export outputs
-                        # ------------------------------------------------------------
                         self.export_manager.export_module_outputs(
                             module_id,
                             dataset_name,
@@ -3533,9 +2952,6 @@ class ResearchRunner:
                             module_output_dir
                         )
 
-                        # ------------------------------------------------------------
-                        # Statistics
-                        # ------------------------------------------------------------
                         stats_df = self.export_manager.consolidate_statistics(
                             module_id,
                             dataset_name,
@@ -3557,9 +2973,6 @@ class ResearchRunner:
 
                         all_stats.append(stats_df)
 
-                        # ------------------------------------------------------------
-                        # Index entry
-                        # ------------------------------------------------------------
                         index_data.append({
                             "module_id": module_id,
                             "module_name": module_name,
@@ -3589,9 +3002,6 @@ class ResearchRunner:
                             len(stats_df)
                         )
 
-                        # ------------------------------------------------------------
-                        # Build and export Module 209 report
-                        # ------------------------------------------------------------
                         report = self.summary_builder.build_module_report(
                             module_id,
                             module_info,
@@ -3613,8 +3023,6 @@ class ResearchRunner:
                             "stats_count": len(stats_df)
                         })
 
-                        # Only successful modules satisfy downstream
-                        # dependencies.
                         if success:
                             self.completed_modules.add(
                                 (dataset_name, module_id)
@@ -3624,9 +3032,232 @@ class ResearchRunner:
                             f"    Module 209 completed for {dataset_name}"
                         )
 
-                        # CRITICAL:
-                        # Prevent Module 209 from falling through to the
-                        # generic run_dataframe() execution path.
+                        continue
+
+                    # ============================================================
+                    # MODULE 213 - PERFORMANCE ATTRIBUTION
+                    # ============================================================
+                    # File-driven module. Consume actual executed trades from 210.
+                    # This dispatch must be outside `if dependencies:`.
+                    # ============================================================
+                    if module_id == "213":
+                        self.logger.info(
+                            "    Using dedicated Module 213 performance attribution path"
+                        )
+
+                        trade_log_path = (
+                            self.export_manager.raw_dir
+                            / "module210"
+                            / dataset_name
+                            / "executed_trade_log.parquet"
+                        )
+
+                        if not trade_log_path.exists():
+                            raise FileNotFoundError(
+                                "Module 213 requires Module 210 executed trades: "
+                                f"{trade_log_path}. Run Module 210 first."
+                            )
+
+                        trade_log = pd.read_parquet(trade_log_path)
+
+                        if trade_log.empty:
+                            raise ValueError(
+                                f"Module 210 trade log is empty: {trade_log_path}"
+                            )
+
+                        required_columns = {
+                            "trade_id",
+                            "entry_time",
+                            "exit_time",
+                            "direction",
+                            "net_pnl",
+                            "holding_bars",
+                        }
+                        missing_columns = required_columns - set(trade_log.columns)
+
+                        if missing_columns:
+                            raise ValueError(
+                                "Module 213 trade log is missing required columns: "
+                                f"{sorted(missing_columns)}. "
+                                f"Available: {list(trade_log.columns)}"
+                            )
+
+                        if trade_log["trade_id"].duplicated().any():
+                            raise ValueError(
+                                "Module 213 input contains duplicate trade_id values."
+                            )
+
+                        self.logger.info(
+                            f"    Module 213 trade-log input: {trade_log_path}"
+                        )
+                        self.logger.info(
+                            f"    Module 213 input rows: {len(trade_log):,}"
+                        )
+
+                        result = module.run_attribution(
+                            trade_log_path=trade_log_path,
+                            dataset_id=f"213_{dataset_name}",
+                            output_dir=module_output_dir,
+                        )
+
+                        duration = time.time() - start_time
+
+                        # ----------------------------------------------------
+                        # Mandatory validation gate
+                        # ----------------------------------------------------
+                        validation = getattr(result, "statistics", {})
+                        if not isinstance(validation, dict):
+                            validation = {}
+
+                        validation_passed = validation.get(
+                            "software_validation_passed"
+                        )
+
+                        if validation_passed is not True:
+                            raise RuntimeError(
+                                "Module 213 did not explicitly pass software "
+                                "validation. "
+                                f"Reported value: {validation_passed!r}"
+                            )
+
+                        success = result_succeeded(result)
+
+                        if not success:
+                            raise RuntimeError(
+                                "Module 213 returned a non-success result "
+                                "after its validation gate."
+                            )
+
+                        # ----------------------------------------------------
+                        # Verify required exports before campaign bookkeeping
+                        # ----------------------------------------------------
+                        required_outputs = [
+                            "performance_summary.csv",
+                            "performance_by_direction.csv",
+                            "performance_by_session.csv",
+                            "performance_by_hour.csv",
+                            "performance_by_day.csv",
+                            "performance_by_holding_time.csv",
+                            "performance_commission.csv",
+                            "performance_slippage.csv",
+                            "performance_attribution_report.txt",
+                        ]
+
+                        missing_outputs = [
+                            name
+                            for name in required_outputs
+                            if not (module_output_dir / name).exists()
+                        ]
+
+                        if missing_outputs:
+                            raise FileNotFoundError(
+                                "Module 213 did not export all required outputs: "
+                                f"{missing_outputs}"
+                            )
+
+                        # ----------------------------------------------------
+                        # Store artifacts
+                        # ----------------------------------------------------
+                        if hasattr(result, "artifacts") and result.artifacts:
+                            self.artifact_store.put(
+                                dataset_name,
+                                module_id,
+                                result.artifacts
+                            )
+
+                        # Export standardized artifacts
+                        self.export_manager.export_module_outputs(
+                            module_id,
+                            dataset_name,
+                            result,
+                            module_output_dir
+                        )
+
+                        # ----------------------------------------------------
+                        # Statistics
+                        # ----------------------------------------------------
+                        stats_df = self.export_manager.consolidate_statistics(
+                            module_id,
+                            dataset_name,
+                            result
+                        )
+
+                        stats_df["timestamp"] = datetime.now().isoformat()
+                        stats_df["duration"] = duration
+                        stats_df["version"] = module_info.get(
+                            "module_version",
+                            "unknown"
+                        )
+                        stats_df["has_features"] = self.artifact_store.has(
+                            dataset_name,
+                            module_id,
+                            "features"
+                        )
+                        stats_df["dataset"] = dataset_name
+                        all_stats.append(stats_df)
+
+                        # ----------------------------------------------------
+                        # Campaign index
+                        # ----------------------------------------------------
+                        index_data.append({
+                            "module_id": module_id,
+                            "module_name": module_name,
+                            "dataset": dataset_name,
+                            "status": "PASS",
+                            "csv_path": str(module_output_dir),
+                            "execution_time": duration,
+                            "rows": len(stats_df),
+                            "version": module_info.get(
+                                "module_version",
+                                "unknown"
+                            ),
+                            "timestamp": datetime.now().isoformat(),
+                            "dependencies": ",".join(dependencies),
+                            "has_features": self.artifact_store.has(
+                                dataset_name,
+                                module_id,
+                                "features"
+                            ),
+                        })
+
+                        self.logger.module_result(
+                            module_id,
+                            dataset_name,
+                            True,
+                            duration,
+                            len(stats_df)
+                        )
+
+                        report = self.summary_builder.build_module_report(
+                            module_id,
+                            module_info,
+                            result,
+                            dataset_name,
+                            duration
+                        )
+
+                        self.export_manager.export_report(
+                            f"{module_id}_{dataset_name}",
+                            report
+                        )
+
+                        self.results.append({
+                            "module_id": module_id,
+                            "dataset": dataset_name,
+                            "success": True,
+                            "duration": duration,
+                            "stats_count": len(stats_df)
+                        })
+
+                        self.completed_modules.add(
+                            (dataset_name, module_id)
+                        )
+
+                        self.logger.info(
+                            f"    Module 213 completed for {dataset_name}"
+                        )
+
+                        # Do not fall through to generic run_dataframe().
                         continue
                     
                     # ----------------------------------------------------
@@ -3653,7 +3284,6 @@ class ResearchRunner:
                             dataset_id=f"{module_id}_{dataset_name}",
                         )
                         
-                        # Verify target generation succeeded
                         missing_targets = [
                             target
                             for target in required_targets
@@ -3692,8 +3322,6 @@ class ResearchRunner:
                             "    Using dedicated Module 210 execution simulation path"
                         )
 
-                        # Module 210 requires Module 209's risk-adjusted portfolio,
-                        # not the raw OHLCV market DataFrame.
                         risk_portfolio_path = (
                             self.export_manager.raw_dir
                             / "module209"
@@ -3722,8 +3350,6 @@ class ResearchRunner:
                             "walk-forward validation path"
                         )
 
-                        # Module 211 requires Module 210's executed trades,
-                        # not the raw OHLCV DataFrame.
                         execution_trade_log_path = (
                             self.export_manager.raw_dir
                             / "module210"
@@ -3738,8 +3364,6 @@ class ResearchRunner:
                                 "Run Module 210 first."
                             )
 
-                        # Module 211 currently segments trade records,
-                        # rather than raw market bars.
                         module.config.train_window_bars = 1000
                         module.config.test_window_bars = 250
                         module.config.step_size = 250
@@ -3757,7 +3381,6 @@ class ResearchRunner:
                             output_dir=module_output_dir,
                         )
                     else:
-                        # Preserve normal execution for all other modules.
                         result = self.module_loader.run_module(
                             module,
                             module_market_df,
@@ -3767,12 +3390,10 @@ class ResearchRunner:
                     
                     duration = time.time() - start_time
                     
-                    # Store artifacts (standardized format) with dataset awareness
                     if hasattr(result, 'artifacts') and result.artifacts:
                         self.artifact_store.put(dataset_name, module_id, result.artifacts)
                         self.logger.info(f"    Stored {len(result.artifacts)} artifacts for {dataset_name}")
                     
-                    # Export outputs
                     self.export_manager.export_module_outputs(
                         module_id,
                         dataset_name,
@@ -3780,14 +3401,12 @@ class ResearchRunner:
                         module_output_dir
                     )
                     
-                    # Extract statistics
                     stats_df = self.export_manager.consolidate_statistics(
                         module_id,
                         dataset_name,
                         result
                     )
                     
-                    # Add metadata
                     stats_df['timestamp'] = datetime.now().isoformat()
                     stats_df['duration'] = duration
                     stats_df['version'] = module_info.get('module_version', 'unknown')
@@ -3796,13 +3415,8 @@ class ResearchRunner:
                     
                     all_stats.append(stats_df)
                     
-                    # FIXED: Use canonical result_succeeded()
                     success = result_succeeded(result)
                     
-                    # ----------------------------------------------------
-                    # Fix 4 — Validation gate: fail the module when
-                    # software_validation_passed is False.
-                    # ----------------------------------------------------
                     validation = {}
                     if hasattr(result, "statistics") and isinstance(result.statistics, dict):
                         validation = result.statistics
@@ -3819,7 +3433,6 @@ class ResearchRunner:
                             f"Module {module_id} validation failed"
                         )
                     
-                    # Build index entry
                     index_data.append({
                         'module_id': module_id,
                         'module_name': module_name,
@@ -3842,7 +3455,6 @@ class ResearchRunner:
                         len(stats_df)
                     )
                     
-                    # Build and export report
                     report = self.summary_builder.build_module_report(
                         module_id,
                         module_info,
@@ -3863,7 +3475,6 @@ class ResearchRunner:
                         'stats_count': len(stats_df)
                     })
                     
-                    # Mark as completed only when execution actually succeeded.
                     if success:
                         self.completed_modules.add((dataset_name, module_id))
                     
@@ -3897,17 +3508,6 @@ class ResearchRunner:
         # ============================================================
         # MODULE 112 - CROSS-TIMEFRAME EXECUTION
         # ============================================================
-        #
-        # Module 112 must receive dependency-enriched feature
-        # DataFrames for ALL available timeframes simultaneously.
-        #
-        # Normal modules run:
-        #     dataset -> module
-        #
-        # Module 112 runs:
-        #     all datasets -> module 112
-        #
-        # ============================================================
 
         module112_info = None
 
@@ -3933,9 +3533,6 @@ class ResearchRunner:
             try:
                 start_time = time.time()
 
-                # ----------------------------------------------------
-                # Determine target requirements for Module 112
-                # ----------------------------------------------------
                 required_targets = self.target_manager.get_target_requirements(
                     module112_info
                 )
@@ -3946,10 +3543,6 @@ class ResearchRunner:
                         f"{required_targets}"
                     )
 
-                # ----------------------------------------------------
-                # Validate dependencies for EVERY timeframe
-                # and build target-enriched datasets
-                # ----------------------------------------------------
                 module112_datasets = {}
 
                 for dataset_name, market_df in datasets.items():
@@ -3965,10 +3558,8 @@ class ResearchRunner:
                         self.completed_modules
                     )
 
-                    # Start from ORIGINAL market/OHLCV data
                     module_market_df = market_df.copy()
 
-                    # Build dependency features
                     feature_df = self.dependency_injector.build_feature_dataframe(
                         dataset_name,
                         dependencies
@@ -3980,7 +3571,6 @@ class ResearchRunner:
                             f"on timeframe {dataset_name}"
                         )
 
-                    # Attach dependency features to the market dataframe
                     module_market_df = pd.concat(
                         [
                             module_market_df.reset_index(drop=True),
@@ -3989,7 +3579,6 @@ class ResearchRunner:
                         axis=1
                     )
 
-                    # Generate targets using the OHLCV-containing dataframe
                     if required_targets:
                         module_market_df = self.target_manager.ensure_targets(
                             module_market_df,
@@ -4023,16 +3612,10 @@ class ResearchRunner:
                         f"{len(module_market_df.columns)} columns"
                     )
 
-                # ----------------------------------------------------
-                # Instantiate Module 112
-                # ----------------------------------------------------
                 module112 = self.module_loader.instantiate_module(
                     module112_info
                 )
 
-                # ----------------------------------------------------
-                # Create dedicated output directory
-                # ----------------------------------------------------
                 module112_output_dir = (
                     self.export_manager.raw_dir
                     / "module112"
@@ -4044,9 +3627,6 @@ class ResearchRunner:
                     exist_ok=True
                 )
 
-                # ----------------------------------------------------
-                # Run Module 112 ONCE across all timeframes
-                # ----------------------------------------------------
                 result = module112.run_datasets(
                     module112_datasets,
                     dataset_id="112_multi",
@@ -4055,9 +3635,6 @@ class ResearchRunner:
 
                 duration = time.time() - start_time
 
-                # ----------------------------------------------------
-                # Store artifacts under a dedicated multi-timeframe key
-                # ----------------------------------------------------
                 if hasattr(result, "artifacts") and result.artifacts:
                     self.artifact_store.put(
                         "multi",
@@ -4070,9 +3647,6 @@ class ResearchRunner:
                         f"for Module 112"
                     )
 
-                # ----------------------------------------------------
-                # Export outputs
-                # ----------------------------------------------------
                 self.export_manager.export_module_outputs(
                     module_id,
                     "multi",
@@ -4080,9 +3654,6 @@ class ResearchRunner:
                     module112_output_dir
                 )
 
-                # ----------------------------------------------------
-                # Extract statistics
-                # ----------------------------------------------------
                 stats_df = self.export_manager.consolidate_statistics(
                     module_id,
                     "multi",
@@ -4106,9 +3677,6 @@ class ResearchRunner:
 
                 all_stats.append(stats_df)
 
-                # ----------------------------------------------------
-                # Determine success
-                # ----------------------------------------------------
                 success = result_succeeded(result)
 
                 index_data.append({
@@ -4140,9 +3708,6 @@ class ResearchRunner:
                     len(stats_df)
                 )
 
-                # ----------------------------------------------------
-                # Build and export Module 112 report
-                # ----------------------------------------------------
                 report = self.summary_builder.build_module_report(
                     module_id,
                     module112_info,
@@ -4164,7 +3729,6 @@ class ResearchRunner:
                     "stats_count": len(stats_df)
                 })
 
-                # Module 112 completed successfully
                 if success:
                     self.completed_modules.add(
                         ("multi", module_id)
@@ -4217,7 +3781,6 @@ class ResearchRunner:
         self.end_time = time.time()
         total_time = self.end_time - self.start_time
         
-        # Save target generation log
         target_log = self.target_manager.get_target_log()
         if target_log:
             target_log_path = self.output_dir / "target_log.json"
@@ -4225,39 +3788,22 @@ class ResearchRunner:
                 json.dump(target_log, f, indent=2, default=str)
             self.logger.info(f"Saved target log: {target_log_path}")
         
-        # Consolidate all statistics
         if all_stats:
             master_df = pd.concat(all_stats, ignore_index=True)
             self.export_manager.save_master_database(master_df)
             self.logger.info(f"Saved master database: {len(master_df)} rows")
         
-        # Save research index
         index_df = pd.DataFrame(index_data)
         self.export_manager.save_research_index(index_df)
         self.logger.info(f"Saved research index: {len(index_df)} entries")
         
-        # Save injection log
         injection_log = self.dependency_injector.get_injection_log()
         injection_path = self.output_dir / "injection_log.json"
         with open(injection_path, 'w', encoding='utf-8') as f:
             json.dump(injection_log, f, indent=2, default=str)
         self.logger.info(f"Saved injection log: {injection_path}")
         
-        # ----------------------------------------------------------------
-        # Fix 5 — Campaign freeze gate
-        # ----------------------------------------------------------------
-        # Abort before writing the final campaign summary when the campaign
-        # is not freeze-ready:
-        #   - any module failed validation, OR
-        #   - Module 205 selected zero features (only when Module 205 was
-        #     part of this run).
-        #
-        # NOTE:
-        # Module 205's "selected_count" is read from the index entry,
-        # which is populated from result.statistics["selected_count"].
-        # The number of statistics rows is NOT the same as the number of
-        # selected features and must not be used for this gate.
-
+        # Campaign freeze gate
         failed_modules = sum(
             1 for r in self.results
             if not r.get("success", False)
@@ -4269,13 +3815,6 @@ class ResearchRunner:
                 f"{failed_modules} module(s) failed validation."
             )
 
-        # ------------------------------------------------------------
-        # Check Module 205 selection only when Module 205 is
-        # part of the current execution order.
-        #
-        # Partial runs such as --modules 207 must not fail merely
-        # because Module 205 was not executed in this run.
-        # ------------------------------------------------------------
         module205_in_run = any(
             str(module_info.get("module_id")) == "205"
             for module_info in execution_order
@@ -4297,7 +3836,6 @@ class ResearchRunner:
                     "Module 206 requires at least one selected feature."
                 )
 
-        # Generate campaign summary
         summary = self.summary_builder.build_campaign_summary(
             self.results,
             total_time
@@ -4307,14 +3845,12 @@ class ResearchRunner:
             f.write(summary)
         self.logger.info(f"Saved campaign summary: {summary_path}")
         
-        # Save artifact store summary
         artifact_summary = self.artifact_store.summary()
         artifact_path = self.output_dir / "artifact_summary.json"
         with open(artifact_path, 'w', encoding='utf-8') as f:
             json.dump(artifact_summary, f, indent=2)
         self.logger.info(f"Saved artifact summary: {artifact_path}")
         
-        # Finish campaign
         total_success = sum(1 for r in self.results if r.get('success', False))
         self.logger.finish_campaign(len(self.results), total_success, total_time)
         
