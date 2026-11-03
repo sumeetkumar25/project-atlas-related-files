@@ -209,8 +209,6 @@ class ResearchRunner:
                         )
 
                         if module_id == "117":
-                            # Module 117 requires the original artifact dictionaries
-                            # from Modules 109, 114, 115, and 116.
                             dependency_artifacts = {}
 
                             for dep in dependencies:
@@ -235,9 +233,6 @@ class ResearchRunner:
                             )
 
                         elif module_id == "118":
-                            # Module 118 consumes:
-                            #   - Module 117 "kept_features" to know WHICH features survived
-                            #   - Module 109 "features"     to obtain the ACTUAL feature values
                             dependency_artifacts = {}
 
                             for dep in dependencies:
@@ -3037,9 +3032,6 @@ class ResearchRunner:
                     # ============================================================
                     # MODULE 213 - PERFORMANCE ATTRIBUTION
                     # ============================================================
-                    # File-driven module. Consume actual executed trades from 210.
-                    # This dispatch must be outside `if dependencies:`.
-                    # ============================================================
                     if module_id == "213":
                         self.logger.info(
                             "    Using dedicated Module 213 performance attribution path"
@@ -3070,16 +3062,32 @@ class ResearchRunner:
                             "entry_time",
                             "exit_time",
                             "direction",
-                            "net_pnl",
                             "holding_bars",
                         }
                         missing_columns = required_columns - set(trade_log.columns)
+
+                        pnl_columns = {"net_pnl", "net_pnl_usd"}
+                        if not (pnl_columns & set(trade_log.columns)):
+                            missing_columns.add("net_pnl or net_pnl_usd")
 
                         if missing_columns:
                             raise ValueError(
                                 "Module 213 trade log is missing required columns: "
                                 f"{sorted(missing_columns)}. "
                                 f"Available: {list(trade_log.columns)}"
+                            )
+
+                        pnl_column = (
+                            "net_pnl"
+                            if "net_pnl" in trade_log.columns
+                            else "net_pnl_usd"
+                        )
+
+                        if pd.to_numeric(
+                            trade_log[pnl_column], errors="coerce"
+                        ).isna().any():
+                            raise ValueError(
+                                f"Module 213 contains invalid values in {pnl_column}"
                             )
 
                         if trade_log["trade_id"].duplicated().any():
@@ -3102,9 +3110,6 @@ class ResearchRunner:
 
                         duration = time.time() - start_time
 
-                        # ----------------------------------------------------
-                        # Mandatory validation gate
-                        # ----------------------------------------------------
                         validation = getattr(result, "statistics", {})
                         if not isinstance(validation, dict):
                             validation = {}
@@ -3128,9 +3133,6 @@ class ResearchRunner:
                                 "after its validation gate."
                             )
 
-                        # ----------------------------------------------------
-                        # Verify required exports before campaign bookkeeping
-                        # ----------------------------------------------------
                         required_outputs = [
                             "performance_summary.csv",
                             "performance_by_direction.csv",
@@ -3155,9 +3157,6 @@ class ResearchRunner:
                                 f"{missing_outputs}"
                             )
 
-                        # ----------------------------------------------------
-                        # Store artifacts
-                        # ----------------------------------------------------
                         if hasattr(result, "artifacts") and result.artifacts:
                             self.artifact_store.put(
                                 dataset_name,
@@ -3165,7 +3164,6 @@ class ResearchRunner:
                                 result.artifacts
                             )
 
-                        # Export standardized artifacts
                         self.export_manager.export_module_outputs(
                             module_id,
                             dataset_name,
@@ -3173,9 +3171,6 @@ class ResearchRunner:
                             module_output_dir
                         )
 
-                        # ----------------------------------------------------
-                        # Statistics
-                        # ----------------------------------------------------
                         stats_df = self.export_manager.consolidate_statistics(
                             module_id,
                             dataset_name,
@@ -3196,9 +3191,6 @@ class ResearchRunner:
                         stats_df["dataset"] = dataset_name
                         all_stats.append(stats_df)
 
-                        # ----------------------------------------------------
-                        # Campaign index
-                        # ----------------------------------------------------
                         index_data.append({
                             "module_id": module_id,
                             "module_name": module_name,
@@ -3257,7 +3249,6 @@ class ResearchRunner:
                             f"    Module 213 completed for {dataset_name}"
                         )
 
-                        # Do not fall through to generic run_dataframe().
                         continue
                     
                     # ----------------------------------------------------
@@ -3803,7 +3794,6 @@ class ResearchRunner:
             json.dump(injection_log, f, indent=2, default=str)
         self.logger.info(f"Saved injection log: {injection_path}")
         
-        # Campaign freeze gate
         failed_modules = sum(
             1 for r in self.results
             if not r.get("success", False)
