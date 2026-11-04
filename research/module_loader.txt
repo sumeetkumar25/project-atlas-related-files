@@ -112,8 +112,22 @@ class ModuleLoader:
                         'module_version': metadata.get('version', 'unknown'),
                         'depends_on': metadata.get('depends_on', []),
 
-                        # Target requirements declared directly by the module class
-                        'required_targets': getattr(main_class, 'REQUIRED_TARGETS', []),
+                        # Target requirements:
+                        #   1. Class-level REQUIRED_TARGETS takes precedence
+                        #      (a module author's direct declaration on the class).
+                        #   2. Fall back to metadata['required_targets'] when the
+                        #      class attribute is absent or empty.
+                        #   3. Default to [] when neither is provided.
+                        #
+                        # The `or` short-circuit is deliberate: an empty list
+                        # on the class is treated as "no declaration here",
+                        # so a module that sets REQUIRED_TARGETS = [] but
+                        # carries metadata['required_targets'] = [...] will
+                        # still advertise its target requirements.
+                        'required_targets': (
+                            getattr(main_class, 'REQUIRED_TARGETS', None)
+                            or metadata.get('required_targets', [])
+                        ),
 
                         'has_run_dataframe': hasattr(main_class, 'run_dataframe'),
                         'has_run': hasattr(main_class, 'run'),
