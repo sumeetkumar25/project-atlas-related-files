@@ -1,4 +1,3 @@
-
 """
 Dependency Injector - Builds feature DataFrames from dependencies
 with dataset awareness.
@@ -76,6 +75,39 @@ class DependencyInjector:
                 len(frame.columns) for frame in feature_frames
             ),
         })
+
+        # ------------------------------------------------------------
+        # Validate dependency alignment before horizontal concatenation.
+        # Prevent pandas from expanding rows through index union.
+        # ------------------------------------------------------------
+        reference = feature_frames[0]
+        for i, frame in enumerate(feature_frames[1:], start=1):
+            dep_id = dependencies[i]
+            if len(frame) != len(reference):
+                raise ValueError(
+                    f"Dependency row-count mismatch for dataset '{dataset}': "
+                    f"{dependencies[0]}={len(reference)}, "
+                    f"{dep_id}={len(frame)}. "
+                    "Refusing to concatenate misaligned features."
+                )
+            # Prefer timestamp-based alignment when both artifacts expose it.
+            if "timestamp" in reference.columns and "timestamp" in frame.columns:
+                ref_ts = pd.to_datetime(
+                    reference["timestamp"], errors="coerce"
+                ).reset_index(drop=True)
+                frame_ts = pd.to_datetime(
+                    frame["timestamp"], errors="coerce"
+                ).reset_index(drop=True)
+                if ref_ts.isna().any() or frame_ts.isna().any():
+                    raise ValueError(
+                        f"Invalid timestamps in dependency features for '{dataset}'"
+                    )
+                if not ref_ts.equals(frame_ts):
+                    raise ValueError(
+                        f"Timestamp alignment mismatch between "
+                        f"{dependencies[0]} and {dep_id} "
+                        f"for dataset '{dataset}'"
+                    )
 
         combined = pd.concat(feature_frames, axis=1)
 
