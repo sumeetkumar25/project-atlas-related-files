@@ -5,6 +5,7 @@ Every research module must inherit from this class.
 
 UPDATED v3.12:
 - load_dataframe() copies BEFORE modifying to prevent caller DataFrame mutation
+- load_dataframe() applies canonical data contract at the input boundary
 - load_data() and load_dataframe() preserve previously injected features
 - set_dependency_features() unconditionally drops duplicate timestamp
 - set_dependency_features() merges features into self.df for backward compatibility
@@ -405,16 +406,37 @@ class BaseResearchModule(ABC):
     def load_dataframe(self, df: pd.DataFrame, dataset_id: str = "in_memory") -> pd.DataFrame:
         """
         Load data directly from a DataFrame.
-        
+
         IMPORTANT: Copies BEFORE modifying anything.
         The caller's DataFrame is never mutated.
+
+        The input is passed through normalize_research_frame() at the
+        boundary so every downstream consumer — self.market_df, the
+        merged self.df, and any module that inspects either — sees the
+        canonical research-frame schema (column names, dtypes, timestamp
+        format) regardless of how the caller originally shaped the input.
         """
         start_time = time.time()
         self.logger.info(f"Loading from DataFrame: {dataset_id}")
-        
+
         # Copy BEFORE modifying anything
         df = df.copy()
-        
+
+        # Apply canonical research-frame contract at the input boundary.
+        #
+        # We normalize the local `df` BEFORE it is assigned to
+        # self.market_df. This ensures both self.market_df and the
+        # derived self.df (built by _merge_df() from market_df +
+        # feature_df) carry the normalized form. Applying the
+        # normalizer to self.df alone after _merge_df() would leave
+        # market_df un-normalized and inconsistent.
+        from atlas.core.data_contracts import normalize_research_frame
+
+        df = normalize_research_frame(
+            df,
+            dataset_name=dataset_id,
+        )
+
         if 'timestamp' in df.columns:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             df = df.sort_values('timestamp').reset_index(drop=True)
