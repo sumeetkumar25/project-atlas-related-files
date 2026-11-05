@@ -1,0 +1,95 @@
+from pathlib import Path
+
+import pandas as pd
+
+from atlas.core.data_contracts import normalize_research_frame
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+DATASETS = {
+    "15m": ROOT / "data/raw/BTCUSD_15m.csv",
+    "1h": ROOT / "data/raw/BTCUSD_1h.csv",
+    "4h": ROOT / "data/raw/BTCUSD_4h.csv",
+}
+
+
+def inspect_dataset(timeframe, path):
+
+    print("\n" + "=" * 65)
+    print(f"TIMEFRAME: {timeframe}")
+    print(f"FILE: {path}")
+
+    if not path.exists():
+        print("FILE NOT FOUND")
+        return False
+
+    df = pd.read_csv(path)
+
+    print("Original rows:", len(df))
+    print("Original columns:", len(df.columns))
+
+    duplicates = df.columns[
+        df.columns.duplicated(keep=False)
+    ].tolist()
+
+    print("Duplicate columns:", duplicates)
+
+    if "timestamp" in df.columns:
+        print(
+            "Duplicate timestamps:",
+            int(df["timestamp"].duplicated().sum()),
+        )
+
+    if "future_breakout" in df.columns:
+        target = df["future_breakout"]
+
+        print(
+            "Target value counts:",
+            target.value_counts(dropna=False).to_dict(),
+        )
+
+    try:
+        clean = normalize_research_frame(
+            df,
+            dataset_name=timeframe,
+            require_unique_timestamps=(
+                "timestamp" in df.columns
+            ),
+        )
+
+        print("Validated rows:", len(clean))
+        print("Validated columns:", len(clean.columns))
+        print("Validation: PASSED")
+
+        return True
+
+    except Exception as exc:
+        print("Validation: FAILED")
+        print(type(exc).__name__, str(exc))
+        return False
+
+
+if __name__ == "__main__":
+
+    results = {}
+
+    for timeframe, path in DATASETS.items():
+        results[timeframe] = inspect_dataset(
+            timeframe,
+            path,
+        )
+
+    print("\n" + "=" * 65)
+    print("FINAL INPUT VALIDATION")
+
+    for timeframe, passed in results.items():
+        print(
+            timeframe,
+            "PASS" if passed else "FAIL",
+        )
+
+    if not all(results.values()):
+        raise SystemExit(1)
+
+    print("\nALL DATASETS PASSED")
