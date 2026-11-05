@@ -44,25 +44,55 @@ class TargetManager:
     ) -> pd.DataFrame:
         """
         Ensure a target column exists in the DataFrame.
-        
-        If the target already exists, validates it.
-        If not, generates it.
-        
+
+        Contract:
+          - Target already present AND valid -> return df unchanged.
+          - Target already present AND invalid -> raise ValueError.
+            Do NOT regenerate or overwrite.
+
+        The "raise on invalid" rule is critical: Module 108 is the
+        canonical producer of future_breakout. If some upstream stage
+        produced a column with that name but with values outside {0, 1},
+        silently replacing it here with a freshly generated column
+        (derived by TargetManager's own generator) would give every
+        downstream consumer a target that differs from what Module 108
+        intended -- and the mismatch would be invisible because both
+        versions share the same column name.
+
         Args:
             df: Input DataFrame
             target_name: Name of the target to ensure
             dataset_id: Dataset identifier for caching
             config: Optional target-specific configuration
-            
+
         Returns:
-            DataFrame: DataFrame with target column ensured
+            DataFrame: DataFrame with target column ensured (either
+                       present-and-valid, or newly generated).
         """
-        # Check if target already exists
+        # ------------------------------------------------------------
+        # Existing-target branch:
+        #
+        # Preserve an existing future_breakout rather than generating
+        # another version. If validation fails, refuse to proceed -- a
+        # caller that already has a target column must not get it
+        # silently replaced.
+        # ------------------------------------------------------------
         if target_name in df.columns:
-            # Validate existing target
-            if self._validate_existing_target(df[target_name], target_name):
-                self._log_target_event(dataset_id, target_name, "existing", "valid")
-                return df
+            if not self._validate_existing_target(
+                df[target_name],
+                target_name,
+            ):
+                raise ValueError(
+                    f"Existing target '{target_name}' is invalid. "
+                    "Refusing to regenerate or overwrite it."
+                )
+            self._log_target_event(
+                dataset_id,
+                target_name,
+                "existing",
+                "valid",
+            )
+            return df
         
         # Generate target
         if target_name not in self.TARGET_GENERATORS:
