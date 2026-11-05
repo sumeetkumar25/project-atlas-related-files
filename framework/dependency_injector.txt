@@ -79,21 +79,71 @@ class DependencyInjector:
             'total_features': sum(len(df.columns) for df in feature_frames)
         })
         
-        # Concatenate all feature DataFrames
-        combined = pd.concat(feature_frames, axis=1)
+        # Concatenate dependencies while preserving source identity.
+        # Each column is renamed by position, never by global column name.
         
-        # Handle duplicate columns
-        duplicates = combined.columns.duplicated()
-        if duplicates.any():
-            duplicate_cols = combined.columns[duplicates].tolist()
-            
-            # Rename only duplicate columns with source prefix
-            for col in duplicate_cols:
-                for i, frame in enumerate(feature_frames):
-                    if col in frame.columns:
-                        dep_id = dependencies[i]
-                        combined.rename(columns={col: f"{dep_id}_{col}"}, inplace=True)
-                        break
+        # Pre-count column occurrences across all frames to identify
+        # cross-dependency collisions. Timestamp is excluded because it
+        # is dropped per-frame below (the market DataFrame owns the
+        # canonical timestamp).
+        column_occurrences = {}
+        for frame in feature_frames:
+            for col in frame.columns:
+                if col == "timestamp":
+                    continue
+                column_occurrences[col] = column_occurrences.get(col, 0) + 1
+        
+        renamed_frames = []
+        all_columns = []
+
+        for dep_id, frame in zip(dependencies, feature_frames):
+            frame = frame.copy()
+
+            if not frame.columns.is_unique:
+                duplicates = frame.columns[frame.columns.duplicated()].tolist()
+                raise RuntimeError(
+                    f"Dependency {dep_id} exports duplicate columns: {duplicates}"
+                )
+
+            # Timestamp is alignment metadata. The market DataFrame
+            # owns the canonical timestamp.
+            frame = frame.drop(columns=["timestamp"], errors="ignore")
+
+            # Keep unambiguous names unchanged. Prefix collisions
+            # with their dependency ID.
+            rename_map = {}
+            for col in frame.columns:
+                if column_occurrences.get(col, 0) > 1:
+                    rename_map[col] = f"{dep_id}_{col}"
+
+            if rename_map:
+                frame = frame.rename(columns=rename_map)
+
+            renamed_frames.append(frame)
+            all_columns.extend(frame.columns.tolist())
+
+        # Verify that no duplicates remain after per-dependency renaming.
+        # This can still occur if a dependency intentionally exports a
+        # column that already looks like a prefixed name from another
+        # dependency (e.g. dep "100" exports both "x" and "100_x", and
+        # dep "102" also exports "x" -> both "x" columns become "N_x",
+        # and dep "100"'s "100_x" then collides with its own renamed
+        # "x"). Raising here surfaces the true root cause rather than
+        # silently producing a DataFrame with duplicate columns.
+        seen_columns = set()
+        duplicate_cols = set()
+        for col in all_columns:
+            if col in seen_columns:
+                duplicate_cols.add(col)
+            seen_columns.add(col)
+
+        if duplicate_cols:
+            raise RuntimeError(
+                f"Feature collision after dependency prefixing: "
+                f"{sorted(duplicate_cols)}"
+            )
+
+        combined = pd.concat(renamed_frames, axis=1)
         
         return combined
     
