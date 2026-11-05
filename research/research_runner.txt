@@ -3562,6 +3562,49 @@ class ResearchRunner:
                             f"on timeframe {dataset_name}"
                         )
 
+                    # ----------------------------------------------------
+                    # Row-count guard: refuse to concatenate misaligned
+                    # features onto the market DataFrame.
+                    #
+                    # The DependencyInjector already validates alignment
+                    # across dependencies, but this second gate protects
+                    # against the market DataFrame itself being on a
+                    # different row count (e.g. deduplication dropped
+                    # rows from one side only). Refusing here stops the
+                    # campaign with a clear message instead of letting
+                    # pd.concat silently pad with NaN via index union.
+                    # ----------------------------------------------------
+                    if len(feature_df) != len(module_market_df):
+                        raise ValueError(
+                            f"MODULE 112 ROW-COUNT MISMATCH: {dataset_name}: "
+                            f"market={len(module_market_df)}, "
+                            f"dependency_features={len(feature_df)}. "
+                            "Execution stopped to prevent incorrect row alignment."
+                        )
+
+                    if (
+                        "timestamp" in module_market_df.columns
+                        and "timestamp" in feature_df.columns
+                    ):
+                        market_ts = pd.to_datetime(
+                            module_market_df["timestamp"],
+                            errors="coerce",
+                        ).reset_index(drop=True)
+                        feature_ts = pd.to_datetime(
+                            feature_df["timestamp"],
+                            errors="coerce",
+                        ).reset_index(drop=True)
+
+                        if (
+                            market_ts.isna().any()
+                            or feature_ts.isna().any()
+                            or not market_ts.equals(feature_ts)
+                        ):
+                            raise ValueError(
+                                f"MODULE 112 TIMESTAMP MISMATCH: {dataset_name}. "
+                                "Market and dependency features are not aligned."
+                            )
+
                     module_market_df = pd.concat(
                         [
                             module_market_df.reset_index(drop=True),
