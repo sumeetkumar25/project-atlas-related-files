@@ -3605,12 +3605,31 @@ class ResearchRunner:
                                 "Market and dependency features are not aligned."
                             )
 
+                    # ----------------------------------------------------
+                    # Safer concatenation:
+                    #
+                    # The market DataFrame owns the canonical timestamp.
+                    # The dependency feature DataFrame may also carry a
+                    # timestamp (retained by DependencyInjector from its
+                    # reference dependency). Drop it before concat so
+                    # the combined frame has exactly one timestamp
+                    # column and cannot produce silent duplicate-
+                    # timestamp columns.
+                    #
+                    # errors="ignore" handles the case where feature_df
+                    # does not carry a timestamp column at all.
+                    # ----------------------------------------------------
+                    feature_df_no_ts = feature_df.drop(
+                        columns=["timestamp"],
+                        errors="ignore",
+                    ).reset_index(drop=True)
+
                     module_market_df = pd.concat(
                         [
                             module_market_df.reset_index(drop=True),
-                            feature_df.reset_index(drop=True)
+                            feature_df_no_ts,
                         ],
-                        axis=1
+                        axis=1,
                     )
 
                     if required_targets:
