@@ -1,1 +1,195 @@
-D:\delta bot\Project_Atlas\atlas\core\rolling_market_features.py
+"""
+Rolling market features: causal rolling Hurst exponent and normalized
+Shannon entropy.
+
+Both features are computed at daily resolution:
+
+    For each calendar day D with enough trailing history,
+    a statistic is computed on the log returns observed in the
+    window [D - window_days, D). The resulting value is broadcast
+    to every intraday bar of day D.
+
+This makes the output causal: every value at row t depends only on
+observations with timestamp < the calendar day of t.
+
+Why per-day instead of per-bar:
+  - A 60-day rolling Hurst / entropy changes negligibly within a day.
+  - Per-bar computation on 50,000+ rows of R/S analysis would be
+    prohibitively slow for zero additional information.
+  - Per-day broadcast is the standard treatment for slow-moving
+    regime features in quantitative research.
+"""
+
+import numpy as np
+import pandas as pd
+
+
+WINDOW_DAYS = 60
+
+
+def _prepare_rolling_inputs(timestamps, close):
+    """
+    Convert inputs to aligned Series, compute log returns, and derive
+    calendar-day boundaries. Returns (ts, px, log_ret, day_index).
+    """
+    ts = pd.to_datetime(
+        pd.Series(timestamps).reset_index(drop=True),
+        errors="coerce",
+    )
+    px = pd.to_numeric(
+        pd.Series(close).reset_index(drop=True),
+        errors="coerce",
+    )
+
+    n = len(px)
+
+    if n == 0:
+        return ts, px, np.array([], dtype=float), pd.Series(dtype="datetime64[ns]")
+
+    px_arr = px.to_numpy(dtype=float)
+
+    log_ret = np.full(n, np.nan, dtype=float)
+
+    if n >= 2:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratios = px_arr[1:] / px_arr[:-1]
+        log_ret[1:] = np.log(ratios)
+
+    day_index = ts.dt.floor("D")
+
+    return ts, px, log_ret, day_index
+
+
+def _rolling_statistic(
+    timestamps,
+    close,
+    window_days,
+    statistic_fn,
+):
+    """
+    Shared causal rolling-window computation.
+
+    For each calendar day with sufficient trailing history, calls
+    statistic_fn(window_returns) on the log returns observed in
+    [D - window_days, D), then assigns that value to every bar of D.
+
+    statistic_fn must return a float; NaN or exceptions skip the day.
+    """
+    ts, px, log_ret, day_index = _prepare_rolling_inputs(timestamps, close)
+
+    n = len(px)
+    out = np.full(n, np.nan, dtype=float)
+
+    if n == 0:
+        return out
+
+    ts_array = ts.to_numpy()
+    day_array = day_index.to_numpy()
+
+    unique_days = pd.Series(day_array).dropna().unique()
+
+    for day in unique_days:
+        day_start = pd.Timestamp(day)
+        window_start = day_start - pd.Timedelta(days=window_days)
+
+        in_window = (ts_array >= np.datetime64(window_start)) & (
+            ts_array < np.datetime64(day_start)
+        )
+
+        window_returns = log_ret[in_window]
+        window_returns = window_returns[np.isfinite(window_returns)]
+
+        # Need at least a few observations to estimate anything.
+        # The underlying engine will raise on truly-insufficient data;
+        # this guard skips the obvious warm-up case cheaply.
+        if window_returns.size < 10:
+            continue
+
+        try:
+            value = statistic_fn(window_returns)
+        except Exception:
+            continue
+
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            continue
+
+        if np.isfinite(value):
+            bars_of_day = day_array == day
+            out[bars_of_day] = value
+
+    return out
+
+
+def compute_rolling_hurst(
+    timestamps,
+    close,
+    window_days=WINDOW_DAYS,
+):
+    """
+    Compute a causal rolling Hurst exponent.
+
+    Returns a float64 ndarray of the same length as `close`. Rows
+    before the first day with `window_days` of trailing history
+    are NaN.
+
+    Raises no exception on insufficient data — those rows are NaN.
+    """
+    # Lazy import avoids importing Module 035 while its package
+    # is still initializing.
+    from atlas.modules.module035_hurst.engine import HurstEngine
+
+    engine = HurstEngine(
+        min_window=16,
+        num_windows=20,
+    )
+
+    def _score(window_returns):
+        result = engine.compute(
+            window_returns,
+            series_type="log_returns",
+        )
+        return result.hurst_exponent
+
+    return _rolling_statistic(
+        timestamps,
+        close,
+        window_days,
+        _score,
+    )
+
+
+def compute_rolling_entropy(
+    timestamps,
+    close,
+    window_days=WINDOW_DAYS,
+):
+    """
+    Compute a causal rolling normalized Shannon entropy.
+
+    Returns a float64 ndarray of the same length as `close`. Values
+    are in [0, 1]; rows before the first day with `window_days` of
+    trailing history are NaN.
+    """
+    # Lazy import avoids importing Module 037 while its package
+    # is still initializing. Same circular-import class as Module 035.
+    from atlas.modules.module037_entropy.engine import EntropyEngine
+
+    engine = EntropyEngine(
+        bins="fd",
+    )
+
+    def _score(window_returns):
+        result = engine.compute(
+            window_returns,
+            series_type="log_returns",
+        )
+        return result.normalized_entropy
+
+    return _rolling_statistic(
+        timestamps,
+        close,
+        window_days,
+        _score,
+    )
