@@ -76,49 +76,104 @@ class DependencyInjector:
             ),
         })
 
-        # ------------------------------------------------------------
-        # Validate dependency alignment before horizontal concatenation.
-        # Prevent pandas from expanding rows through index union.
-        # ------------------------------------------------------------
+        # ---------------------------------------------------------
+        # Reference frame — column uniqueness and timestamp extraction
+        # ---------------------------------------------------------
         reference = feature_frames[0]
-        for i, frame in enumerate(feature_frames[1:], start=1):
-            dep_id = dependencies[i]
+        reference_dep = dependencies[0]
+
+        if not reference.columns.is_unique:
+            raise ValueError(
+                f"Dependency {reference_dep} contains duplicate "
+                f"column names for dataset {dataset}"
+            )
+
+        if "timestamp" in reference.columns:
+            reference_ts = pd.to_datetime(
+                reference["timestamp"],
+                errors="coerce",
+            ).reset_index(drop=True)
+
+            if reference_ts.isna().any():
+                raise ValueError(
+                    f"Invalid timestamps in dependency {reference_dep} "
+                    f"for dataset {dataset}"
+                )
+        else:
+            reference_ts = None
+
+        # ---------------------------------------------------------
+        # Validate every dependency before assembling anything
+        # ---------------------------------------------------------
+        for dep_id, frame in zip(dependencies[1:], feature_frames[1:]):
+            if not frame.columns.is_unique:
+                raise ValueError(
+                    f"Dependency {dep_id} contains duplicate "
+                    f"column names for dataset {dataset}"
+                )
+
             if len(frame) != len(reference):
                 raise ValueError(
-                    f"Dependency row-count mismatch for dataset '{dataset}': "
-                    f"{dependencies[0]}={len(reference)}, "
-                    f"{dep_id}={len(frame)}. "
-                    "Refusing to concatenate misaligned features."
+                    f"DEPENDENCY ROW COUNT MISMATCH: "
+                    f"{dataset}: {reference_dep}={len(reference)}, "
+                    f"{dep_id}={len(frame)}"
                 )
-            # Prefer timestamp-based alignment when both artifacts expose it.
-            if "timestamp" in reference.columns and "timestamp" in frame.columns:
-                ref_ts = pd.to_datetime(
-                    reference["timestamp"], errors="coerce"
+
+            if (
+                reference_ts is not None
+                and "timestamp" in frame.columns
+            ):
+                current_ts = pd.to_datetime(
+                    frame["timestamp"],
+                    errors="coerce",
                 ).reset_index(drop=True)
-                frame_ts = pd.to_datetime(
-                    frame["timestamp"], errors="coerce"
-                ).reset_index(drop=True)
-                if ref_ts.isna().any() or frame_ts.isna().any():
+
+                if (
+                    current_ts.isna().any()
+                    or not reference_ts.equals(current_ts)
+                ):
                     raise ValueError(
-                        f"Invalid timestamps in dependency features for '{dataset}'"
-                    )
-                if not ref_ts.equals(frame_ts):
-                    raise ValueError(
-                        f"Timestamp alignment mismatch between "
-                        f"{dependencies[0]} and {dep_id} "
-                        f"for dataset '{dataset}'"
+                        f"DEPENDENCY TIMESTAMP MISMATCH: "
+                        f"{dataset}: {reference_dep} vs {dep_id}"
                     )
 
-        combined = pd.concat(feature_frames, axis=1)
+        # ---------------------------------------------------------
+        # Assemble the combined DataFrame.
+        #
+        # 1. Reset indexes so concat aligns positionally (not on
+        #    index labels — which can silently union and pad NaN
+        #    if any frame carries a non-default index).
+        # 2. Retain exactly one timestamp column (the reference's).
+        #    Every other dependency's timestamp is dropped.
+        # 3. Preserve all other feature columns unchanged.
+        # ---------------------------------------------------------
+        aligned_frames = [
+            reference.reset_index(drop=True)
+        ]
 
-        # Preserve the original duplicate-column handling.
+        for frame in feature_frames[1:]:
+            frame_copy = frame.reset_index(drop=True).copy()
+
+            if "timestamp" in frame_copy.columns:
+                frame_copy = frame_copy.drop(columns=["timestamp"])
+
+            aligned_frames.append(frame_copy)
+
+        combined = pd.concat(aligned_frames, axis=1)
+
+        # ---------------------------------------------------------
+        # Duplicate-column handling.
+        #
+        # Columns that collide across dependencies are prefixed
+        # with their source dependency ID.
+        # ---------------------------------------------------------
         duplicates = combined.columns.duplicated()
 
         if duplicates.any():
             duplicate_cols = combined.columns[duplicates].tolist()
 
             for col in duplicate_cols:
-                for i, frame in enumerate(feature_frames):
+                for i, frame in enumerate(aligned_frames):
                     if col in frame.columns:
                         dep_id = dependencies[i]
                         combined.rename(
