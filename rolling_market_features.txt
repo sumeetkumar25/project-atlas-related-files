@@ -77,6 +77,32 @@ def _rolling_statistic(
     """
     ts, px, log_ret, day_index = _prepare_rolling_inputs(timestamps, close)
 
+    # ----------------------------------------------------------
+    # Timestamp integrity checks.
+    #
+    # A rolling-window computation is meaningless if the input
+    # timestamps are NaT, unordered, or contain duplicates:
+    #   - NaT rows corrupt every downstream comparison.
+    #   - Unordered input violates the "past-only" contract of
+    #     the rolling window — the window would silently contain
+    #     future rows.
+    #   - Duplicate timestamps double-count observations inside
+    #     every window, biasing Hurst and entropy estimates.
+    #
+    # Failing fast here surfaces the defect at the source rather
+    # than producing biased rolling features silently.
+    # ----------------------------------------------------------
+    if ts.isna().any():
+        raise ValueError("Rolling features cannot use invalid timestamps.")
+
+    if not ts.is_monotonic_increasing:
+        raise ValueError("Rolling feature timestamps must be chronological.")
+
+    if ts.duplicated().any():
+        raise ValueError("Duplicate timestamps found in rolling feature input.")
+
+    first_timestamp = ts.iloc[0]
+
     n = len(px)
     out = np.full(n, np.nan, dtype=float)
 
@@ -91,6 +117,17 @@ def _rolling_statistic(
     for day in unique_days:
         day_start = pd.Timestamp(day)
         window_start = day_start - pd.Timedelta(days=window_days)
+
+        # Require a complete 60-calendar-day history.
+        #
+        # If the requested window extends before the first
+        # observation, the statistic would be computed on a
+        # partial window — and its value would be emitted to
+        # downstream consumers as if it were a full-window
+        # estimate. Skipping here keeps every non-NaN output
+        # row backed by a complete window of history.
+        if window_start < first_timestamp:
+            continue
 
         in_window = (ts_array >= np.datetime64(window_start)) & (
             ts_array < np.datetime64(day_start)
