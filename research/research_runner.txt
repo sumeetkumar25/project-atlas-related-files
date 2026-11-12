@@ -44,7 +44,8 @@ class ResearchRunner:
         data_path: Path = None,
         output_dir: Path = None,
         log_dir: Path = None,
-        modules_filter: list = None
+        modules_filter: list = None,
+        timeframes_filter: list = None
     ):
         """
         Initialize the research runner.
@@ -54,6 +55,7 @@ class ResearchRunner:
             output_dir: Path to output directory
             log_dir: Path to log directory
             modules_filter: List of module IDs to run (None = all)
+            timeframes_filter: List of timeframes to load (None = all)
         """
         if data_path is None:
             data_path = DEFAULT_DATA_PATH
@@ -66,6 +68,11 @@ class ResearchRunner:
         self.output_dir = Path(output_dir)
         self.log_dir = Path(log_dir)
         self.modules_filter = modules_filter
+        self.timeframes_filter = (
+            [str(tf).lower() for tf in timeframes_filter]
+            if timeframes_filter
+            else None
+        )
         
         # Initialize components
         self.dataset_registry = DatasetRegistry(self.data_path)
@@ -100,6 +107,24 @@ class ResearchRunner:
         # Load datasets
         self.logger.info("Loading datasets...")
         datasets = self.dataset_registry.load_all()
+
+        if self.timeframes_filter is not None:
+            requested = set(self.timeframes_filter)
+            available = set(datasets.keys())
+            unknown = requested - available
+            if unknown:
+                raise ValueError(
+                    f"Unknown timeframe(s): {sorted(unknown)}. "
+                    f"Available: {sorted(available)}"
+                )
+            datasets = {
+                name: df
+                for name, df in datasets.items()
+                if name in requested
+            }
+            self.logger.info(
+                f"Timeframe filter applied: {list(datasets.keys())}"
+            )
         
         if not datasets:
             self.logger.error("No datasets loaded!")
@@ -3565,14 +3590,6 @@ class ResearchRunner:
                     # ----------------------------------------------------
                     # Row-count guard: refuse to concatenate misaligned
                     # features onto the market DataFrame.
-                    #
-                    # The DependencyInjector already validates alignment
-                    # across dependencies, but this second gate protects
-                    # against the market DataFrame itself being on a
-                    # different row count (e.g. deduplication dropped
-                    # rows from one side only). Refusing here stops the
-                    # campaign with a clear message instead of letting
-                    # pd.concat silently pad with NaN via index union.
                     # ----------------------------------------------------
                     if len(feature_df) != len(module_market_df):
                         raise ValueError(
@@ -3606,18 +3623,9 @@ class ResearchRunner:
                             )
 
                     # ----------------------------------------------------
-                    # Safer concatenation:
-                    #
-                    # The market DataFrame owns the canonical timestamp.
-                    # The dependency feature DataFrame may also carry a
-                    # timestamp (retained by DependencyInjector from its
-                    # reference dependency). Drop it before concat so
-                    # the combined frame has exactly one timestamp
-                    # column and cannot produce silent duplicate-
-                    # timestamp columns.
-                    #
-                    # errors="ignore" handles the case where feature_df
-                    # does not carry a timestamp column at all.
+                    # Safer concatenation: drop feature_df's timestamp
+                    # so the combined frame has exactly one timestamp
+                    # column (the market's).
                     # ----------------------------------------------------
                     feature_df_no_ts = feature_df.drop(
                         columns=["timestamp"],
@@ -3955,7 +3963,8 @@ def main():
     runner = ResearchRunner(
         data_path=Path(args.data_path),
         output_dir=Path(args.output_dir),
-        modules_filter=args.modules
+        modules_filter=args.modules,
+        timeframes_filter=args.timeframes
     )
     
     success = runner.run()
