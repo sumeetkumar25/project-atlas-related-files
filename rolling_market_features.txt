@@ -29,8 +29,8 @@ WINDOW_DAYS = 60
 
 def _prepare_rolling_inputs(timestamps, close):
     """
-    Convert inputs to aligned Series, compute log returns, and derive
-    calendar-day boundaries. Returns (ts, px, log_ret, day_index).
+    Convert inputs to aligned Series, compute gap-aware log returns,
+    and derive calendar-day boundaries.
     """
     ts = pd.to_datetime(
         pd.Series(timestamps).reset_index(drop=True),
@@ -47,13 +47,59 @@ def _prepare_rolling_inputs(timestamps, close):
         return ts, px, np.array([], dtype=float), pd.Series(dtype="datetime64[ns]")
 
     px_arr = px.to_numpy(dtype=float)
+    ts_arr = ts.to_numpy(dtype="datetime64[ns]")
 
     log_ret = np.full(n, np.nan, dtype=float)
 
     if n >= 2:
+        expected_interval = pd.Timedelta(
+            seconds=900
+        )  # BTCUSD 15m default
+
+        # Infer timeframe from the dominant positive timestamp difference.
+        differences = pd.Series(ts).diff()
+        valid_differences = differences[
+            differences > pd.Timedelta(0)
+        ]
+
+        if not valid_differences.empty:
+            inferred = valid_differences.mode()
+            if not inferred.empty:
+                expected_interval = inferred.iloc[0]
+
+        # Gap-aware adjacent return computation.
+        #
+        # A return spanning a timestamp gap larger than the expected
+        # interval is not a single-bar return — it is a multi-bar
+        # aggregate move compressed into one observation. Treating it
+        # as a unit-interval return would bias the log-returns
+        # distribution that Hurst (R/S) and entropy both analyze under
+        # the implicit assumption of uniform sampling.
+        #
+        # We compute every adjacent ratio, then NaN out the ones whose
+        # timestamp gap exceeds 1.5 * expected_interval.
         with np.errstate(divide="ignore", invalid="ignore"):
             ratios = px_arr[1:] / px_arr[:-1]
-        log_ret[1:] = np.log(ratios)
+
+        candidate_log_ret = np.log(ratios)
+
+        # Per-adjacent-pair gap (length n-1). diff()[0] is NaT for the
+        # first element; slice from index 1 so the arrays align with
+        # candidate_log_ret, which represents pairs (0,1), (1,2), ...
+        gap_series = pd.Series(ts_arr).diff().iloc[1:]
+
+        gap_tolerance = expected_interval * 1.5
+
+        is_contiguous = (
+            gap_series.notna()
+            & (gap_series <= gap_tolerance)
+        ).to_numpy()
+
+        log_ret[1:] = np.where(
+            is_contiguous,
+            candidate_log_ret,
+            np.nan,
+        )
 
     day_index = ts.dt.floor("D")
 
@@ -118,7 +164,7 @@ def _rolling_statistic(
         day_start = pd.Timestamp(day)
         window_start = day_start - pd.Timedelta(days=window_days)
 
-        # Require a complete 60-calendar-day history.
+        # Require a complete window_days-calendar-day history.
         #
         # If the requested window extends before the first
         # observation, the statistic would be computed on a
@@ -135,6 +181,31 @@ def _rolling_statistic(
 
         window_returns = log_ret[in_window]
         window_returns = window_returns[np.isfinite(window_returns)]
+
+        # ------------------------------------------------------
+        # Require at least 99% of expected return observations.
+        #
+        # Missing candles must not silently become valid history.
+        # A 60-day window with 50 missing bars is not the same
+        # sample as a 60-day window with none, but without this
+        # gate both would emit "a 60-day rolling Hurst value."
+        # ------------------------------------------------------------------
+        expected_interval = pd.Series(ts).diff()
+        expected_interval = expected_interval[
+            expected_interval > pd.Timedelta(0)
+        ].mode()
+
+        if expected_interval.empty:
+            continue
+
+        interval = expected_interval.iloc[0]
+        expected_returns = int(
+            pd.Timedelta(days=window_days) / interval
+        )
+        minimum_returns = int(np.ceil(expected_returns * 0.99))
+
+        if window_returns.size < minimum_returns:
+            continue
 
         # Need at least a few observations to estimate anything.
         # The underlying engine will raise on truly-insufficient data;
