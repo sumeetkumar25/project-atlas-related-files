@@ -3,7 +3,10 @@ Base Research Module
 
 Every research module must inherit from this class.
 
-UPDATED v3.12:
+UPDATED v3.13:
+- set_dependency_features() validates dependency timestamps BEFORE dropping them
+- set_dependency_features() refuses misaligned dependencies at injection time
+- _merge_df() validates market-vs-dependency timestamp alignment
 - load_dataframe() copies BEFORE modifying to prevent caller DataFrame mutation
 - load_dataframe() applies canonical data contract at the input boundary
 - load_data() and load_dataframe() preserve previously injected features
@@ -126,39 +129,98 @@ class BaseResearchModule(ABC):
         """Override to add step-specific validation."""
         return []
     
-    def set_dependency_features(self, feature_df: pd.DataFrame) -> None:
-        """
-        Set dependency features from other modules.
-        
-        This is called by the research runner to inject features
-        from dependent modules. Features are stored separately from
-        market data to prevent accidental overwriting.
-        
-        IMPORTANT: 
-        - Stores a copy to prevent memory sharing with ArtifactStore.
-        - Drops duplicate 'timestamp' column unconditionally, since
-          market data always owns the canonical timestamp.
-        - Merges feature_df into self.df for backward compatibility.
-        
-        Args:
-            feature_df: Combined feature DataFrame from dependencies
-        """
+    def set_dependency_features(self, feature_df: pd.DataFrame):
+        """Store dependency features and preserve timestamps for alignment checks."""
         self.feature_df = feature_df.copy()
 
-        print("[DEBUG BASE] market columns:", self.market_df.columns.tolist() if self.market_df is not None else None)
-        print("[DEBUG BASE] incoming feature columns:", feature_df.columns.tolist())
-        print("[DEBUG BASE] copied feature columns:", self.feature_df.columns.tolist())
-        print("[DEBUG BASE] market has timestamp:", self.market_df is not None and 'timestamp' in self.market_df.columns)
-        print("[DEBUG BASE] feature has timestamp:", 'timestamp' in self.feature_df.columns)
+        # Retain dependency timestamps before removing the timestamp column.
+        self._dependency_timestamps = None
 
-        # Market data always owns the canonical timestamp.
-        # Dependency artifacts may include timestamp only for alignment/metadata.
-        # Drop it unconditionally to prevent duplicate timestamp columns.
-        if 'timestamp' in self.feature_df.columns:
-            self.feature_df = self.feature_df.drop(columns=['timestamp'])
-        
-        # Backward compatibility: merge features into self.df
-        if self.market_df is not None:
+        if "timestamp" in self.feature_df.columns:
+            dependency_ts = pd.to_datetime(
+                self.feature_df["timestamp"],
+                errors="coerce"
+            ).reset_index(drop=True)
+
+            if dependency_ts.isna().any():
+                raise ValueError(
+                    "Dependency features contain invalid or missing timestamps."
+                )
+
+            if dependency_ts.duplicated().any():
+                raise ValueError(
+                    "Dependency features contain duplicate timestamps."
+                )
+
+            if not dependency_ts.is_monotonic_increasing:
+                raise ValueError(
+                    "Dependency feature timestamps are not chronological."
+                )
+
+            self._dependency_timestamps = dependency_ts
+
+            # Keep the existing feature dataframe format.
+            self.feature_df = self.feature_df.drop(columns=["timestamp"])
+
+        self._merge_df()
+    
+    def _merge_df(self):
+        """Merge market and dependency features after validating timestamps."""
+        if self.market_df is None:
+            # No market DataFrame — no validation possible. Fall back to
+            # feature-only or empty state, matching the pre-patch behavior.
+            if self.feature_df is not None:
+                self.df = self.feature_df.copy()
+            else:
+                self.df = None
+            return
+
+        # Validate dependency timestamps against market timestamps whenever
+        # dependency timestamps were supplied.
+        dependency_ts = getattr(self, "_dependency_timestamps", None)
+
+        if dependency_ts is not None:
+            if "timestamp" not in self.market_df.columns:
+                raise ValueError(
+                    "Market dataframe has no timestamp column; "
+                    "cannot validate dependency alignment."
+                )
+
+            market_ts = pd.to_datetime(
+                self.market_df["timestamp"],
+                errors="coerce"
+            ).reset_index(drop=True)
+
+            if market_ts.isna().any():
+                raise ValueError(
+                    "Market dataframe contains invalid or missing timestamps."
+                )
+
+            if market_ts.duplicated().any():
+                raise ValueError(
+                    "Market dataframe contains duplicate timestamps."
+                )
+
+            if not market_ts.is_monotonic_increasing:
+                raise ValueError(
+                    "Market dataframe timestamps are not chronological."
+                )
+
+            if len(market_ts) != len(dependency_ts):
+                raise ValueError(
+                    "MARKET/DEPENDENCY ROW COUNT MISMATCH: "
+                    f"market={len(market_ts)}, "
+                    f"dependency={len(dependency_ts)}"
+                )
+
+            if not market_ts.equals(dependency_ts):
+                raise ValueError(
+                    "MARKET/DEPENDENCY TIMESTAMP MISALIGNMENT: "
+                    "dependency timestamps do not match market timestamps."
+                )
+
+        # Proceed with the merge now that alignment has been validated.
+        if self.feature_df is not None:
             self.df = pd.concat(
                 [
                     self.market_df.reset_index(drop=True),
@@ -167,34 +229,7 @@ class BaseResearchModule(ABC):
                 axis=1
             )
         else:
-            self.df = self.feature_df.copy()
-        
-        self.logger.info(
-            f"Injected {len(self.feature_df.columns)} dependency features (copy) "
-            f"→ df now has {len(self.df.columns)} columns"
-        )
-    
-    def _merge_df(self) -> None:
-        """
-        Merge market_df and feature_df into df for backward compatibility.
-        
-        Preserves previously injected features when market data is reloaded.
-        """
-        if self.market_df is not None:
-            if self.feature_df is not None:
-                self.df = pd.concat(
-                    [
-                        self.market_df.reset_index(drop=True),
-                        self.feature_df.reset_index(drop=True)
-                    ],
-                    axis=1
-                )
-            else:
-                self.df = self.market_df.copy()
-        elif self.feature_df is not None:
-            self.df = self.feature_df.copy()
-        else:
-            self.df = None
+            self.df = self.market_df.copy()
     
     def _create_default_artifacts(self):
         """
