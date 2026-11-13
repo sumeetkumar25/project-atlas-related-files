@@ -69,15 +69,19 @@ def _prepare_rolling_inputs(timestamps, close):
 
         # Gap-aware adjacent return computation.
         #
-        # A return spanning a timestamp gap larger than the expected
-        # interval is not a single-bar return — it is a multi-bar
-        # aggregate move compressed into one observation. Treating it
-        # as a unit-interval return would bias the log-returns
-        # distribution that Hurst (R/S) and entropy both analyze under
-        # the implicit assumption of uniform sampling.
+        # A return spanning a timestamp gap is not a single-bar return
+        # — it is a multi-bar aggregate move compressed into one
+        # observation. Treating it as a unit-interval return would
+        # bias the log-returns distribution that Hurst (R/S) and
+        # entropy both analyze under the implicit assumption of
+        # uniform sampling.
         #
         # We compute every adjacent ratio, then NaN out the ones whose
-        # timestamp gap exceeds 1.5 * expected_interval.
+        # timestamp gap is NOT exactly the expected interval. Exact
+        # equality is strict on purpose: a 20-minute diff in 15-minute
+        # data is a real gap (missing candle, delayed feed), not a
+        # normal spacing, and must not silently become a "valid"
+        # return inside a rolling window.
         with np.errstate(divide="ignore", invalid="ignore"):
             ratios = px_arr[1:] / px_arr[:-1]
 
@@ -88,11 +92,9 @@ def _prepare_rolling_inputs(timestamps, close):
         # candidate_log_ret, which represents pairs (0,1), (1,2), ...
         gap_series = pd.Series(ts_arr).diff().iloc[1:]
 
-        gap_tolerance = expected_interval * 1.5
-
         is_contiguous = (
             gap_series.notna()
-            & (gap_series <= gap_tolerance)
+            & (gap_series == expected_interval)
         ).to_numpy()
 
         log_ret[1:] = np.where(
@@ -104,6 +106,26 @@ def _prepare_rolling_inputs(timestamps, close):
     day_index = ts.dt.floor("D")
 
     return ts, px, log_ret, day_index
+
+
+def compute_gap_aware_log_returns(timestamps, close):
+    """
+    Return one log return per input row.
+
+    First row and returns spanning missing candle intervals are NaN.
+
+    This is the single source of truth for gap-aware log returns
+    across the framework. Modules 035 (Hurst) and 037 (entropy) should
+    use this helper for their full-sample descriptive statistics
+    rather than computing `np.diff(np.log(prices))` locally, so the
+    full-sample and rolling paths see exactly the same observations.
+    """
+    _, _, log_returns, _ = _prepare_rolling_inputs(
+        timestamps,
+        close,
+    )
+
+    return log_returns
 
 
 def _rolling_statistic(
@@ -189,7 +211,7 @@ def _rolling_statistic(
         # A 60-day window with 50 missing bars is not the same
         # sample as a 60-day window with none, but without this
         # gate both would emit "a 60-day rolling Hurst value."
-        # ------------------------------------------------------------------
+        # ------------------------------------------------------
         expected_interval = pd.Series(ts).diff()
         expected_interval = expected_interval[
             expected_interval > pd.Timedelta(0)
