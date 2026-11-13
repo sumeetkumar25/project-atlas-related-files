@@ -2143,6 +2143,70 @@ class ResearchRunner:
                             )
 
                             if feature_df is not None:
+                                # ----------------------------------------------------
+                                # Market-vs-dependency timestamp alignment guard.
+                                #
+                                # The DependencyInjector already validates
+                                # inter-dependency alignment, and each dependency
+                                # is required to expose a timestamp column. This
+                                # guard closes the remaining gap: it verifies that
+                                # the combined dependency features are on exactly
+                                # the same timeline as the market DataFrame before
+                                # set_dependency_features() merges them.
+                                #
+                                # Failure modes it catches that the injector alone
+                                # does not:
+                                #   - Market DataFrame has no timestamp column
+                                #     (would otherwise surface as silent positional
+                                #     alignment downstream).
+                                #   - Market and dependency features are on different
+                                #     row counts (a dependency's features may have
+                                #     been truncated upstream before reaching the
+                                #     injector, so the injector's own row-count check
+                                #     still passes — the frames agree with each
+                                #     other, but not with the market).
+                                #   - Market timestamps and dependency timestamps
+                                #     diverge even though the injector's reference
+                                #     comparison passed (e.g. the market DataFrame
+                                #     was loaded from a different parquet than the
+                                #     dependencies, or one side was reindexed).
+                                # ----------------------------------------------------
+                                if "timestamp" not in market_df.columns:
+                                    raise ValueError(
+                                        f"Market data has no timestamp column for {dataset_name}"
+                                    )
+
+                                if "timestamp" not in feature_df.columns:
+                                    raise ValueError(
+                                        f"Combined dependency features have no timestamp "
+                                        f"for {dataset_name}"
+                                    )
+
+                                market_ts = pd.to_datetime(
+                                    market_df["timestamp"],
+                                    errors="coerce",
+                                ).reset_index(drop=True)
+
+                                feature_ts = pd.to_datetime(
+                                    feature_df["timestamp"],
+                                    errors="coerce",
+                                ).reset_index(drop=True)
+
+                                if (
+                                    len(market_ts) != len(feature_ts)
+                                    or market_ts.isna().any()
+                                    or feature_ts.isna().any()
+                                    or market_ts.duplicated().any()
+                                    or feature_ts.duplicated().any()
+                                    or not market_ts.is_monotonic_increasing
+                                    or not feature_ts.is_monotonic_increasing
+                                    or not market_ts.equals(feature_ts)
+                                ):
+                                    raise ValueError(
+                                        f"MARKET/DEPENDENCY TIMESTAMP ALIGNMENT FAILURE: "
+                                        f"{dataset_name}. Module {module_id} injection stopped."
+                                    )
+
                                 module.set_dependency_features(feature_df)
 
                                 self.logger.info(
