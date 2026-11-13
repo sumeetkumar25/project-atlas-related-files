@@ -14,6 +14,7 @@ class DependencyInjector:
     Builds combined feature DataFrames from dependent modules.
 
     Every module must export 'features' in its artifacts.
+    Every 'features' DataFrame must carry a 'timestamp' column.
     Dataset-aware: only uses artifacts from the same dataset.
     """
 
@@ -77,39 +78,47 @@ class DependencyInjector:
         })
 
         # ---------------------------------------------------------
-        # Reference frame — column uniqueness and timestamp extraction
+        # Strict timestamp validation for every dependency
         # ---------------------------------------------------------
         reference = feature_frames[0]
         reference_dep = dependencies[0]
 
         if not reference.columns.is_unique:
             raise ValueError(
-                f"Dependency {reference_dep} contains duplicate "
-                f"column names for dataset {dataset}"
+                f"Dependency {reference_dep} contains duplicate columns"
             )
 
-        if "timestamp" in reference.columns:
-            reference_ts = pd.to_datetime(
-                reference["timestamp"],
-                errors="coerce",
-            ).reset_index(drop=True)
+        if "timestamp" not in reference.columns:
+            raise ValueError(
+                f"Dependency {reference_dep} has no timestamp column "
+                f"for dataset {dataset}"
+            )
 
-            if reference_ts.isna().any():
-                raise ValueError(
-                    f"Invalid timestamps in dependency {reference_dep} "
-                    f"for dataset {dataset}"
-                )
-        else:
-            reference_ts = None
+        reference_ts = pd.to_datetime(
+            reference["timestamp"],
+            errors="coerce",
+        ).reset_index(drop=True)
 
-        # ---------------------------------------------------------
-        # Validate every dependency before assembling anything
-        # ---------------------------------------------------------
+        if (
+            reference_ts.isna().any()
+            or reference_ts.duplicated().any()
+            or not reference_ts.is_monotonic_increasing
+        ):
+            raise ValueError(
+                f"Invalid, duplicate, or unsorted timestamps in "
+                f"dependency {reference_dep} for dataset {dataset}"
+            )
+
         for dep_id, frame in zip(dependencies[1:], feature_frames[1:]):
             if not frame.columns.is_unique:
                 raise ValueError(
-                    f"Dependency {dep_id} contains duplicate "
-                    f"column names for dataset {dataset}"
+                    f"Dependency {dep_id} contains duplicate columns"
+                )
+
+            if "timestamp" not in frame.columns:
+                raise ValueError(
+                    f"Dependency {dep_id} has no timestamp column "
+                    f"for dataset {dataset}"
                 )
 
             if len(frame) != len(reference):
@@ -119,23 +128,26 @@ class DependencyInjector:
                     f"{dep_id}={len(frame)}"
                 )
 
-            if (
-                reference_ts is not None
-                and "timestamp" in frame.columns
-            ):
-                current_ts = pd.to_datetime(
-                    frame["timestamp"],
-                    errors="coerce",
-                ).reset_index(drop=True)
+            current_ts = pd.to_datetime(
+                frame["timestamp"],
+                errors="coerce",
+            ).reset_index(drop=True)
 
-                if (
-                    current_ts.isna().any()
-                    or not reference_ts.equals(current_ts)
-                ):
-                    raise ValueError(
-                        f"DEPENDENCY TIMESTAMP MISMATCH: "
-                        f"{dataset}: {reference_dep} vs {dep_id}"
-                    )
+            if (
+                current_ts.isna().any()
+                or current_ts.duplicated().any()
+                or not current_ts.is_monotonic_increasing
+            ):
+                raise ValueError(
+                    f"Invalid, duplicate, or unsorted timestamps in "
+                    f"dependency {dep_id} for dataset {dataset}"
+                )
+
+            if not reference_ts.equals(current_ts):
+                raise ValueError(
+                    f"DEPENDENCY TIMESTAMP MISMATCH: "
+                    f"{dataset}: {reference_dep} vs {dep_id}"
+                )
 
         # ---------------------------------------------------------
         # Assemble the combined DataFrame.
