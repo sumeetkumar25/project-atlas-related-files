@@ -3,7 +3,9 @@ Base Research Module
 
 Every research module must inherit from this class.
 
-UPDATED v3.13:
+UPDATED v3.14:
+- Default validation artifact derives its status from result.statistics
+  and result.errors instead of hardcoding passed=True
 - set_dependency_features() validates dependency timestamps BEFORE dropping them
 - set_dependency_features() refuses misaligned dependencies at injection time
 - _merge_df() validates market-vs-dependency timestamp alignment
@@ -275,14 +277,45 @@ class BaseResearchModule(ABC):
         
         # -------------------------------
         # VALIDATION
+        #
+        # Derive the passed flag from the module's own reported outcome
+        # rather than hardcoding True.
+        #
+        # The previous version unconditionally wrote "passed": True when
+        # a module did not register its own validation artifact. That
+        # meant a module whose compute() failed validation — or whose
+        # compute() added errors to result.errors — could still export
+        # a validation.json claiming success. Downstream consumers
+        # (research_runner.py's campaign freeze gate, campaign audits,
+        # human review) relied on that file and were silently misled.
+        #
+        # The new logic requires TWO conditions for passed=True:
+        #
+        #   1. The module explicitly reported success via
+        #      result.statistics["software_validation_passed"] or
+        #      ["validation_passed"].
+        #   2. result.errors is empty.
+        #
+        # Missing both keys defaults to False: absence of evidence is
+        # treated as failure, not success. This is deliberate — the
+        # only path to a passing validation is a module that actually
+        # asserted it passed.
         # -------------------------------
         if "validation" not in artifacts:
+            statistics = self.result.statistics or {}
+
+            passed = statistics.get(
+                "software_validation_passed",
+                statistics.get("validation_passed", False),
+            )
+
+            passed = bool(passed) and not bool(self.result.errors)
+
             artifacts["validation"] = {
-                "passed": True,
-                "errors": self.result.errors or [],
-                "warnings": self.result.warnings or []
+                "passed": passed,
+                "errors": list(self.result.errors or []),
+                "warnings": list(self.result.warnings or []),
             }
-            self.logger.info("Created 'validation' with default values")
     
     def _validate_artifact_types(self, artifacts: Dict[str, Any]) -> List[str]:
         """
